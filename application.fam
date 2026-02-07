@@ -1,0 +1,10 @@
+App(
+    appid="tlsr_swire_demo",
+    name="Telink SWire Demo",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="tlsr_swire_demo_app",
+    requires=["gui", "gpio"],
+    stack_size=2 * 1024,
+    fap_icon="tlsr_swire_demo.png",
+    fap_category="Gpio",
+)
