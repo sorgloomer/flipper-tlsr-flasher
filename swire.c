@@ -1,158 +1,312 @@
+#include <stdlib.h>
 #include <furi.h>
-
+#include <furi_hal_resources.h>
+#include <furi/core/log.h>
+#include "swire_common.h"
+#include "swire_clock.h"
 #include "swire.h"
 
-uint32_t unit_ticks;
-uint32_t unit_ticks_times_2;
-uint32_t unit_ticks_times_2_5;
-uint32_t unit_ticks_times_3;
-uint32_t unit_ticks_times_4;
-uint32_t unit_ticks_backoff;
+uint32_t _unit_ticks;
+uint32_t _unit_ticks_backoff;
 
-void _SwireSwsSetListen(const Swire* swire);
-void _SwireSwsSetDrive(const Swire* swire);
+SWIRE_INLINE static bool _swire_spinwait_until_pin_or_timeout(
+    Swire* swire,
+    const GpioPin* pin,
+    bool value,
+    uint32_t timeout_tick);
+void _swire_init_with_sws(Swire* swire, const GpioPin* pin_sws_o, const GpioPin* pin_sws_i);
 
 void swire_global_init() {
-    unit_ticks = furi_ms_to_ticks(208) / 1000;
-    unit_ticks_times_2 = 2 * unit_ticks;
-    unit_ticks_times_3 = 3 * unit_ticks;
-    unit_ticks_times_4 = 4 * unit_ticks;
-    unit_ticks_times_2_5 = 5 * unit_ticks / 2;
-    unit_ticks_backoff = unit_ticks * 20;
+    swire_global_init_with_bitrate(75600);
 }
 
-void SwireInit(Swire* swire, const GpioPin* pin_sws) {
-    swire->pin_sws = pin_sws;
-    swire->timeout_ticks = furi_ms_to_ticks(10);
+void swire_global_init_with_bitrate(uint32_t bitrate) {
+    uint32_t unitrate = bitrate * 5;
+
+    _unit_ticks = SystemCoreClock / unitrate;
+    _unit_ticks_backoff = _unit_ticks * 10;
+}
+
+void swire_global_log_params() {
+    FURI_LOG_I("swire", "_unit_ticks=%lu", _unit_ticks);
+    FURI_LOG_I("swire", "_unit_ticks_backoff=%lu", _unit_ticks_backoff);
+    FURI_LOG_I("swire", "furi_kernel_get_tick_frequency()=%lu", furi_kernel_get_tick_frequency());
+}
+
+Swire* swire_alloc_with_sws(const GpioPin* pin_sws_i, const GpioPin* pin_sws_o) {
+    Swire* swire = malloc(sizeof(Swire));
+    _swire_init_with_sws(swire, pin_sws_i, pin_sws_o);
+    return swire;
+}
+
+void swire_free(Swire* swire) {
+    free(swire);
+}
+
+void _swire_init_with_sws(Swire* swire, const GpioPin* pin_sws_i, const GpioPin* pin_sws_o) {
+    swire->pin_sws_i = pin_sws_i;
+    swire->pin_sws_o = pin_sws_o;
+
+    swire->timeout_byte_ticks = _unit_ticks * 5 * 10 * 10;
     swire->error = SwireErrorNone;
-    _SwireSwsSetListen(swire);
-    SwireTimerRestart(swire);
+
+    furi_hal_gpio_write(swire->pin_sws_i, true);
+    furi_hal_gpio_init(swire->pin_sws_i, GpioModeInput, GpioPullUp, GpioSpeedVeryHigh);
+
+    furi_hal_gpio_write(swire->pin_sws_o, true);
+    furi_hal_gpio_init(swire->pin_sws_o, GpioModeOutputOpenDrain, GpioPullUp, GpioSpeedVeryHigh);
+
+    swire_timer_restart(swire);
 }
 
-void SwireTimerRestart(Swire* swire) {
-    swire->next_unit_tick = furi_get_tick();
+void swire_timer_restart(Swire* swire) {
+    swire->next_unit_tick = swire_clock_get_real_tick();
 }
 
-void SwireTimerContinue(Swire* swire) {
+void swire_timer_continue(Swire* swire) {
     uint32_t next_unit_tick = swire->next_unit_tick;
-    int32_t delta = furi_get_tick() - next_unit_tick - 10;
-    if(delta > 0) {
-        furi_delay_until_tick(next_unit_tick);
-    }
-    swire->next_unit_tick = furi_get_tick();
+    swire_clock_spinwait_until_tick(next_unit_tick);
+    swire->next_unit_tick = swire_clock_get_real_tick();
 }
 
-void _SwireWriteBits(Swire* swire, uint32_t bits, int count) {
-    SwireTimerContinue(swire);
-    _SwireSwsSetDrive(swire);
-    int32_t prev_lock = furi_kernel_lock();
-    uint32_t tick = furi_get_tick();
-    for(; count > 0; count--) {
-        furi_hal_gpio_write(swire->pin_sws, false);
-        uint32_t bit_mask = -(int32_t)((bits >> count) & 1);
-        tick += unit_ticks + unit_ticks_times_3 & bit_mask;
-        furi_delay_until_tick(tick);
+void _swire_write_bitsn(Swire* swire, uint32_t bits, int count) {
+    const GpioPin* pin_sws_o = swire->pin_sws_o;
+    swire_timer_continue(swire);
 
-        furi_hal_gpio_write(swire->pin_sws, true);
-        tick += unit_ticks_times_4 - unit_ticks_times_3 & bit_mask;
-        furi_delay_until_tick(tick);
+    bits <<= 32 - count;
+    uint32_t unit_1 = _unit_ticks;
+    uint32_t unit_4 = _unit_ticks * 4;
+    uint32_t unit_sw = unit_1 ^ unit_4;
+    __disable_irq();
+
+    furi_hal_gpio_write(pin_sws_o, false);
+    uint32_t tick = swire_clock_get_real_tick();
+    while(count > 0) {
+        uint32_t bit = bits >> 31;
+        bits <<= 1;
+        SWIRE_CLOCK_PROGRESS_TICKS(tick, unit_1 ^ (bit * unit_sw));
+        furi_hal_gpio_write(pin_sws_o, true);
+        --count;
+        SWIRE_CLOCK_PROGRESS_TICKS(tick, unit_4 ^ (bit * unit_sw));
+        furi_hal_gpio_write(pin_sws_o, false);
     }
-    furi_hal_gpio_write(swire->pin_sws, false);
-    tick += unit_ticks;
-    furi_delay_until_tick(tick);
-    furi_hal_gpio_write(swire->pin_sws, true);
-    _SwireSwsSetListen(swire);
-    furi_kernel_restore_lock(prev_lock);
-    swire->next_unit_tick = tick + unit_ticks_backoff;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, _unit_ticks);
+    __enable_irq();
+
+    swire->next_unit_tick = tick + _unit_ticks_backoff;
 }
 
-void SwireTransactionStart(Swire* swire, uint32_t addr, Rw rw, uint32_t slave_id) {
+void _swire_write_bits9(Swire* swire, uint32_t bits) {
+    const GpioPin* pin_sws_o = swire->pin_sws_o;
+    uint32_t xor_a, xor_b;
+    uint32_t ts_1 = _unit_ticks;
+    uint32_t ts_4 = _unit_ticks * 4;
+    uint32_t ts_sw = ts_1 ^ ts_4;
+
+    xor_a = (bits >> 8) & 1;
+    xor_a *= ts_sw;
+
+    swire_timer_continue(swire);
+    __disable_irq();
+
+    uint32_t tick = swire_clock_get_real_tick();
+    furi_hal_gpio_write(pin_sws_o, false);
+    xor_b = (bits >> 7) & 1;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_a);
+    furi_hal_gpio_write(pin_sws_o, true);
+    xor_b *= ts_sw;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_a);
+    furi_hal_gpio_write(pin_sws_o, false);
+    xor_a = (bits >> 6) & 1;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_b);
+    furi_hal_gpio_write(pin_sws_o, true);
+    xor_a *= ts_sw;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_b);
+    furi_hal_gpio_write(pin_sws_o, false);
+    xor_b = (bits >> 5) & 1;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_a);
+    furi_hal_gpio_write(pin_sws_o, true);
+    xor_b *= ts_sw;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_a);
+    furi_hal_gpio_write(pin_sws_o, false);
+    xor_a = (bits >> 4) & 1;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_b);
+    furi_hal_gpio_write(pin_sws_o, true);
+    xor_a *= ts_sw;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_b);
+    furi_hal_gpio_write(pin_sws_o, false);
+    xor_b = (bits >> 3) & 1;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_a);
+    furi_hal_gpio_write(pin_sws_o, true);
+    xor_b *= ts_sw;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_a);
+    furi_hal_gpio_write(pin_sws_o, false);
+    xor_a = (bits >> 2) & 1;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_b);
+    furi_hal_gpio_write(pin_sws_o, true);
+    xor_a *= ts_sw;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_b);
+    furi_hal_gpio_write(pin_sws_o, false);
+    xor_b = (bits >> 1) & 1;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_a);
+    furi_hal_gpio_write(pin_sws_o, true);
+    xor_b *= ts_sw;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_a);
+    furi_hal_gpio_write(pin_sws_o, false);
+    xor_a = (bits >> 0) & 1;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_b);
+    furi_hal_gpio_write(pin_sws_o, true);
+    xor_a *= ts_sw;
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_b);
+    furi_hal_gpio_write(pin_sws_o, false);
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_a);
+    furi_hal_gpio_write(pin_sws_o, true);
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_a);
+    furi_hal_gpio_write(pin_sws_o, false);
+    SWIRE_CLOCK_PROGRESS_TICKS(tick, _unit_ticks);
+    furi_hal_gpio_write(pin_sws_o, true);
+    __enable_irq();
+
+    swire->next_unit_tick = tick + _unit_ticks_backoff;
+}
+
+void swire_transaction_start(Swire* swire, uint32_t addr, Rw rw, uint32_t slave_id) {
     if(swire->error != SwireErrorNone) return;
-    furi_hal_gpio_write(swire->pin_sws, true);
-    furi_hal_gpio_init(swire->pin_sws, GpioModeOutputPushPull, GpioPullNo, GpioSpeedVeryHigh);
-
     int32_t rwid = (rw == RwRead ? 0x80 : 0x00) | (slave_id & 0x7f);
-    _SwireWriteBits(swire, 0x15a, 9);
-    _SwireWriteBits(swire, (addr >> 16) & 0xff, 9);
-    _SwireWriteBits(swire, (addr >> 8) & 0xff, 9);
-    _SwireWriteBits(swire, (addr >> 0) & 0xff, 9);
-    _SwireWriteBits(swire, rwid, 9);
+    swire_timer_continue(swire);
+    _swire_write_bits9(swire, 0x15a);
+    _swire_write_bits9(swire, (addr >> 16) & 0xff);
+    _swire_write_bits9(swire, (addr >> 8) & 0xff);
+    _swire_write_bits9(swire, (addr >> 0) & 0xff);
+    _swire_write_bits9(swire, rwid);
 }
 
-void SwireTransactionEnd(Swire* swire) {
-    if(SwireHasError(swire)) return;
-    _SwireWriteBits(swire, 0x1ff, 9);
+void swire_transaction_end(Swire* swire) {
+    if(swire_has_error(swire)) return;
+    swire_transaction_end_force(swire);
 }
 
-void SwireByteWrite(Swire* swire, uint8_t data) {
-    if(SwireHasError(swire)) return;
-    _SwireWriteBits(swire, data, 9);
+void swire_transaction_end_force(Swire* swire) {
+    _swire_write_bits9(swire, 0x1ff);
 }
 
-bool _WaitForPinOrTimeout(const GpioPin* pin, bool value, uint32_t timeout) {
-    while(furi_hal_gpio_read(pin) != value) {
-        if(((int32_t)(timeout - furi_get_tick())) < 0) {
-            // signed comparison to handle tick overflow
+void swire_byte_write(Swire* swire, uint8_t data) {
+    if(swire_has_error(swire)) return;
+    _swire_write_bits9(swire, data);
+}
+
+SWIRE_INLINE static bool _swire_spinwait_until_pin_or_timeout(
+    Swire* swire,
+    const GpioPin* pin,
+    bool value,
+    uint32_t timeout_tick) {
+    for(;;) {
+        if(furi_hal_gpio_read(pin) == value) {
+            return false;
+        }
+        if(swire_clock_tick_elapsed(timeout_tick)) {
+            swire->error = SwireErrorTimeout;
             return true;
         }
     }
-    return false;
 }
 
-int32_t SwireByteRead(Swire* swire) {
-    if(SwireHasError(swire)) return -1;
-    uint32_t timeout;
-    uint32_t timer;
-    const GpioPin* pin_sws = swire->pin_sws;
-    SwireTimerContinue(swire);
-    _SwireSwsSetDrive(swire);
-    int32_t prev_lock = furi_kernel_lock();
-    timeout = furi_get_tick() + swire->timeout_ticks;
+#define _SWIRE_WAIT_EDGE(tick, value)                                 \
+    for(;;) {                                                         \
+        if(furi_hal_gpio_read(pin_sws_i) == (value)) break;           \
+        if(furi_hal_gpio_read(pin_sws_i) == (value)) break;           \
+        uint32_t __local_tick = swire_clock_get_real_tick();          \
+        if(((int32_t)(__local_tick - timeout)) > 0) goto halt_abrupt; \
+        if(furi_hal_gpio_read(pin_sws_i) == (value)) break;           \
+        if(furi_hal_gpio_read(pin_sws_i) == (value)) break;           \
+    }                                                                 \
+    (tick) = swire_clock_get_real_tick();
 
-    uint32_t tick = furi_get_tick();
-    furi_hal_gpio_write(pin_sws, false);
-    tick += unit_ticks;
-    furi_delay_until_tick(tick);
+#define _SWIRE_READ_STORE_BIT(tick1, tick2, tick3, value) \
+    buffer |= (((tick3) - (tick2)) < ((tick2) - (tick1))) ? (value) : 0;
 
-    _SwireSwsSetListen(swire);
-
-    int ibit = 0;
+int32_t swire_byte_read(Swire* swire) {
+    if(swire_has_error(swire)) return -1;
+    const GpioPin* pin_sws_o = swire->pin_sws_o;
+    const GpioPin* pin_sws_i = swire->pin_sws_i;
+    swire_timer_continue(swire);
+    uint32_t tickss = swire_clock_get_real_tick();
+    uint32_t timeout = tickss + swire->timeout_byte_ticks;
     uint32_t buffer = 0;
-    for(ibit = 0; ibit < 8; ibit++) {
-        if(_WaitForPinOrTimeout(pin_sws, false, timeout)) goto halt_abrupt;
+    uint32_t ticks[18] = {0};
 
-        timer = furi_get_tick() + unit_ticks_times_2_5;
-        buffer = buffer << 1;
-        furi_delay_until_tick(timer);
-        buffer |= furi_hal_gpio_read(pin_sws) ? 0 : 1;
-        if(_WaitForPinOrTimeout(pin_sws, true, timeout)) goto halt_abrupt;
-    }
+    __disable_irq();
 
-    if(_WaitForPinOrTimeout(pin_sws, false, timeout)) goto halt_abrupt;
+    furi_hal_gpio_write(pin_sws_o, false); // Write trigger
+    uint32_t tickss1 = swire_clock_get_real_tick();
+    SWIRE_CLOCK_PROGRESS_TICKS(tickss1, _unit_ticks);
+    furi_hal_gpio_write(pin_sws_o, true); // Write trigger
+    uint32_t tickss2 = swire_clock_get_real_tick();
 
-    timer = furi_get_tick() + unit_ticks_times_2;
-    furi_kernel_restore_lock(prev_lock);
+    _SWIRE_WAIT_EDGE(ticks[0], false); // 7
+    _SWIRE_WAIT_EDGE(ticks[1], true);
+    _SWIRE_WAIT_EDGE(ticks[2], false); // 6
+    _SWIRE_WAIT_EDGE(ticks[3], true);
+    _SWIRE_WAIT_EDGE(ticks[4], false); // 5
+    _SWIRE_WAIT_EDGE(ticks[5], true);
+    _SWIRE_WAIT_EDGE(ticks[6], false); // 4
+    _SWIRE_WAIT_EDGE(ticks[7], true);
+    _SWIRE_WAIT_EDGE(ticks[8], false); // 3
+    _SWIRE_WAIT_EDGE(ticks[9], true);
+    _SWIRE_WAIT_EDGE(ticks[10], false); // 2
+    _SWIRE_WAIT_EDGE(ticks[11], true);
+    _SWIRE_WAIT_EDGE(ticks[12], false); // 1
+    _SWIRE_WAIT_EDGE(ticks[13], true);
+    _SWIRE_WAIT_EDGE(ticks[14], false); // 0
+    _SWIRE_WAIT_EDGE(ticks[15], true);
+    _SWIRE_WAIT_EDGE(ticks[16], false); // END
+    _SWIRE_WAIT_EDGE(ticks[17], true);
+    _SWIRE_READ_STORE_BIT(ticks[0], ticks[1], ticks[2], 0x80);
+    _SWIRE_READ_STORE_BIT(ticks[2], ticks[3], ticks[4], 0x40);
+    _SWIRE_READ_STORE_BIT(ticks[4], ticks[5], ticks[6], 0x20);
+    _SWIRE_READ_STORE_BIT(ticks[6], ticks[7], ticks[8], 0x10);
+    _SWIRE_READ_STORE_BIT(ticks[8], ticks[9], ticks[10], 0x08);
+    _SWIRE_READ_STORE_BIT(ticks[10], ticks[11], ticks[12], 0x04);
+    _SWIRE_READ_STORE_BIT(ticks[12], ticks[13], ticks[14], 0x02);
+    _SWIRE_READ_STORE_BIT(ticks[14], ticks[15], ticks[16], 0x01);
 
-    furi_delay_until_tick(timer);
-    swire->next_unit_tick = timer + unit_ticks_backoff;
+    __enable_irq();
 
+    swire->next_unit_tick = ticks[17] + _unit_ticks_backoff;
+    swire_clock_spinwait_until_tick(swire->next_unit_tick);
+
+    // FURI_LOG_I("swire", "CHECKPOINT read %lx", buffer);
     return buffer;
 halt_abrupt:
-    furi_kernel_restore_lock(prev_lock);
+    __enable_irq();
     swire->error = SwireErrorTimeout;
+    FURI_LOG_I("swire", "CHECKPOINT read error %lx", buffer);
+    FURI_LOG_I("swire", "  CHECKPOINT tickss    = %lu", tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT tickss    = %lu", tickss - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT timeout   = %lu", timeout - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT tickss1   = %lu", tickss1 - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT tickss2   = %lu", tickss2 - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[ 0] = %lu", ticks[0] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[ 1] = %lu", ticks[1] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[ 2] = %lu", ticks[2] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[ 3] = %lu", ticks[3] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[ 4] = %lu", ticks[4] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[ 5] = %lu", ticks[5] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[ 6] = %lu", ticks[6] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[ 7] = %lu", ticks[7] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[ 8] = %lu", ticks[8] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[ 9] = %lu", ticks[9] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[10] = %lu", ticks[10] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[11] = %lu", ticks[11] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[12] = %lu", ticks[12] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[13] = %lu", ticks[13] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[14] = %lu", ticks[14] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[15] = %lu", ticks[15] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[16] = %lu", ticks[16] - tickss);
+    FURI_LOG_I("swire", "  CHECKPOINT ticks[17] = %lu", ticks[17] - tickss);
     return -1;
 }
 
-void _SwireSwsSetListen(const Swire* swire) {
-    furi_hal_gpio_write(swire->pin_sws, true);
-    furi_hal_gpio_init(swire->pin_sws, GpioModeInput, GpioPullUp, GpioSpeedVeryHigh);
-}
-
-void _SwireSwsSetDrive(const Swire* swire) {
-    furi_hal_gpio_write(swire->pin_sws, true);
-    furi_hal_gpio_init(swire->pin_sws, GpioModeOutputPushPull, GpioPullNo, GpioSpeedVeryHigh);
-}
-
-bool SwireHasError(Swire* swire) {
+SWIRE_INLINE bool swire_has_error(Swire* swire) {
     return swire->error != SwireErrorNone;
 }
