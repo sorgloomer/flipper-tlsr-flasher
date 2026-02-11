@@ -4,51 +4,59 @@
 #include <furi/core/log.h>
 #include "swire_common.h"
 #include "swire_clock.h"
-#include "swire.h"
+#include "./swire_bitbang.h"
 
 uint32_t _unit_ticks;
 uint32_t _unit_ticks_backoff;
 
-SWIRE_INLINE static bool _swire_spinwait_until_pin_or_timeout(
-    Swire* swire,
+static void _swire_bitbang_init_with_sws(
+    SwireBitbang* swire,
+    const GpioPin* pin_sws_i,
+    const GpioPin* pin_sws_o);
+
+SWIRE_INLINE static bool _swire_bitbang_spinwait_until_pin_or_timeout(
+    SwireBitbang* swire,
     const GpioPin* pin,
     bool value,
     uint32_t timeout_tick);
-void _swire_init_with_sws(Swire* swire, const GpioPin* pin_sws_o, const GpioPin* pin_sws_i);
+void _swire_init_with_sws(SwireBitbang* swire, const GpioPin* pin_sws_o, const GpioPin* pin_sws_i);
 
-void swire_global_init() {
-    swire_global_init_with_bitrate(75600);
+void swire_bitbang_global_init() {
+    swire_bitbang_global_init_with_bitrate(75600);
 }
 
-void swire_global_init_with_bitrate(uint32_t bitrate) {
+void swire_bitbang_global_init_with_bitrate(uint32_t bitrate) {
     uint32_t unitrate = bitrate * 5;
 
     _unit_ticks = SystemCoreClock / unitrate;
     _unit_ticks_backoff = _unit_ticks * 10;
 }
 
-void swire_global_log_params() {
+void swire_bitbang_global_log_params() {
     FURI_LOG_I("swire", "_unit_ticks=%lu", _unit_ticks);
     FURI_LOG_I("swire", "_unit_ticks_backoff=%lu", _unit_ticks_backoff);
     FURI_LOG_I("swire", "furi_kernel_get_tick_frequency()=%lu", furi_kernel_get_tick_frequency());
 }
 
-Swire* swire_alloc_with_sws(const GpioPin* pin_sws_i, const GpioPin* pin_sws_o) {
-    Swire* swire = malloc(sizeof(Swire));
-    _swire_init_with_sws(swire, pin_sws_i, pin_sws_o);
+SwireBitbang* swire_bitbang_alloc_with_sws(const GpioPin* pin_sws_i, const GpioPin* pin_sws_o) {
+    SwireBitbang* swire = malloc(sizeof(SwireBitbang));
+    _swire_bitbang_init_with_sws(swire, pin_sws_i, pin_sws_o);
     return swire;
 }
 
-void swire_free(Swire* swire) {
+void swire_bitbang_free(SwireBitbang* swire) {
     free(swire);
 }
 
-void _swire_init_with_sws(Swire* swire, const GpioPin* pin_sws_i, const GpioPin* pin_sws_o) {
+static void _swire_bitbang_init_with_sws(
+    SwireBitbang* swire,
+    const GpioPin* pin_sws_i,
+    const GpioPin* pin_sws_o) {
     swire->pin_sws_i = pin_sws_i;
     swire->pin_sws_o = pin_sws_o;
 
     swire->timeout_byte_ticks = _unit_ticks * 5 * 10 * 10;
-    swire->error = SwireErrorNone;
+    swire->error = SwireBitbangErrorNone;
 
     furi_hal_gpio_write(swire->pin_sws_i, true);
     furi_hal_gpio_init(swire->pin_sws_i, GpioModeInput, GpioPullUp, GpioSpeedVeryHigh);
@@ -56,22 +64,22 @@ void _swire_init_with_sws(Swire* swire, const GpioPin* pin_sws_i, const GpioPin*
     furi_hal_gpio_write(swire->pin_sws_o, true);
     furi_hal_gpio_init(swire->pin_sws_o, GpioModeOutputOpenDrain, GpioPullUp, GpioSpeedVeryHigh);
 
-    swire_timer_restart(swire);
+    swire_bitbang_timer_restart(swire);
 }
 
-void swire_timer_restart(Swire* swire) {
+void swire_bitbang_timer_restart(SwireBitbang* swire) {
     swire->next_unit_tick = swire_clock_get_real_tick();
 }
 
-void swire_timer_continue(Swire* swire) {
+void swire_bitbang_timer_continue(SwireBitbang* swire) {
     uint32_t next_unit_tick = swire->next_unit_tick;
     swire_clock_spinwait_until_tick(next_unit_tick);
     swire->next_unit_tick = swire_clock_get_real_tick();
 }
 
-void _swire_write_bitsn(Swire* swire, uint32_t bits, int count) {
+void _swire_bitbang_write_bitsn(SwireBitbang* swire, uint32_t bits, int count) {
     const GpioPin* pin_sws_o = swire->pin_sws_o;
-    swire_timer_continue(swire);
+    swire_bitbang_timer_continue(swire);
 
     bits <<= 32 - count;
     uint32_t unit_1 = _unit_ticks;
@@ -96,7 +104,7 @@ void _swire_write_bitsn(Swire* swire, uint32_t bits, int count) {
     swire->next_unit_tick = tick + _unit_ticks_backoff;
 }
 
-void _swire_write_bits9(Swire* swire, uint32_t bits) {
+void _swire_bitbang_write_bits9(SwireBitbang* swire, uint32_t bits) {
     const GpioPin* pin_sws_o = swire->pin_sws_o;
     uint32_t xor_a, xor_b;
     uint32_t ts_1 = _unit_ticks;
@@ -106,7 +114,7 @@ void _swire_write_bits9(Swire* swire, uint32_t bits) {
     xor_a = (bits >> 8) & 1;
     xor_a *= ts_sw;
 
-    swire_timer_continue(swire);
+    swire_bitbang_timer_continue(swire);
     __disable_irq();
 
     uint32_t tick = swire_clock_get_real_tick();
@@ -170,33 +178,37 @@ void _swire_write_bits9(Swire* swire, uint32_t bits) {
     swire->next_unit_tick = tick + _unit_ticks_backoff;
 }
 
-void swire_transaction_start(Swire* swire, uint32_t addr, Rw rw, uint32_t slave_id) {
-    if(swire->error != SwireErrorNone) return;
-    int32_t rwid = (rw == RwRead ? 0x80 : 0x00) | (slave_id & 0x7f);
-    swire_timer_continue(swire);
-    _swire_write_bits9(swire, 0x15a);
-    _swire_write_bits9(swire, (addr >> 16) & 0xff);
-    _swire_write_bits9(swire, (addr >> 8) & 0xff);
-    _swire_write_bits9(swire, (addr >> 0) & 0xff);
-    _swire_write_bits9(swire, rwid);
+void swire_bitbang_transaction_start(
+    SwireBitbang* swire,
+    uint32_t addr,
+    SwireBitbangRw rw,
+    uint32_t slave_id) {
+    if(swire->error != SwireBitbangErrorNone) return;
+    int32_t rwid = (rw == SwireBitbangRwRead ? 0x80 : 0x00) | (slave_id & 0x7f);
+    swire_bitbang_timer_continue(swire);
+    _swire_bitbang_write_bits9(swire, 0x15a);
+    _swire_bitbang_write_bits9(swire, (addr >> 16) & 0xff);
+    _swire_bitbang_write_bits9(swire, (addr >> 8) & 0xff);
+    _swire_bitbang_write_bits9(swire, (addr >> 0) & 0xff);
+    _swire_bitbang_write_bits9(swire, rwid);
 }
 
-void swire_transaction_end(Swire* swire) {
-    if(swire_has_error(swire)) return;
-    swire_transaction_end_force(swire);
+void swire_bitbang_transaction_end(SwireBitbang* swire) {
+    if(swire_bitbang_has_error(swire)) return;
+    swire_bitbang_transaction_end_force(swire);
 }
 
-void swire_transaction_end_force(Swire* swire) {
-    _swire_write_bits9(swire, 0x1ff);
+void swire_bitbang_transaction_end_force(SwireBitbang* swire) {
+    _swire_bitbang_write_bits9(swire, 0x1ff);
 }
 
-void swire_byte_write(Swire* swire, uint8_t data) {
-    if(swire_has_error(swire)) return;
-    _swire_write_bits9(swire, data);
+void swire_bitbang_byte_write(SwireBitbang* swire, uint8_t data) {
+    if(swire_bitbang_has_error(swire)) return;
+    _swire_bitbang_write_bits9(swire, data);
 }
 
-SWIRE_INLINE static bool _swire_spinwait_until_pin_or_timeout(
-    Swire* swire,
+SWIRE_INLINE static bool _swire_bitbang_spinwait_until_pin_or_timeout(
+    SwireBitbang* swire,
     const GpioPin* pin,
     bool value,
     uint32_t timeout_tick) {
@@ -205,7 +217,7 @@ SWIRE_INLINE static bool _swire_spinwait_until_pin_or_timeout(
             return false;
         }
         if(swire_clock_tick_elapsed(timeout_tick)) {
-            swire->error = SwireErrorTimeout;
+            swire->error = SwireBitbangErrorTimeout;
             return true;
         }
     }
@@ -225,11 +237,11 @@ SWIRE_INLINE static bool _swire_spinwait_until_pin_or_timeout(
 #define _SWIRE_READ_STORE_BIT(tick1, tick2, tick3, value) \
     buffer |= (((tick3) - (tick2)) < ((tick2) - (tick1))) ? (value) : 0;
 
-int32_t swire_byte_read(Swire* swire) {
-    if(swire_has_error(swire)) return -1;
+int32_t swire_bitbang_byte_read(SwireBitbang* swire) {
+    if(swire_bitbang_has_error(swire)) return -1;
     const GpioPin* pin_sws_o = swire->pin_sws_o;
     const GpioPin* pin_sws_i = swire->pin_sws_i;
-    swire_timer_continue(swire);
+    swire_bitbang_timer_continue(swire);
     uint32_t tickss = swire_clock_get_real_tick();
     uint32_t timeout = tickss + swire->timeout_byte_ticks;
     uint32_t buffer = 0;
@@ -279,7 +291,7 @@ int32_t swire_byte_read(Swire* swire) {
     return buffer;
 halt_abrupt:
     __enable_irq();
-    swire->error = SwireErrorTimeout;
+    swire->error = SwireBitbangErrorTimeout;
     FURI_LOG_I("swire", "CHECKPOINT read error %lx", buffer);
     FURI_LOG_I("swire", "  CHECKPOINT tickss    = %lu", tickss);
     FURI_LOG_I("swire", "  CHECKPOINT tickss    = %lu", tickss - tickss);
@@ -307,6 +319,6 @@ halt_abrupt:
     return -1;
 }
 
-SWIRE_INLINE bool swire_has_error(Swire* swire) {
-    return swire->error != SwireErrorNone;
+SWIRE_INLINE bool swire_bitbang_has_error(SwireBitbang* swire) {
+    return swire->error != SwireBitbangErrorNone;
 }
