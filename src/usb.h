@@ -1,5 +1,6 @@
 #pragma once
 
+#include "furi_hal_usb_cdc.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <furi.h>
@@ -11,14 +12,15 @@ typedef enum WorkerEventFlags WorkerEventFlags;
 typedef struct SwireUsb SwireUsb;
 
 typedef void (*SwireUsbRxLineCallback)(void* context, SwireUsb* sender, FuriString* line);
-typedef struct {
-    SwireUsbRxLineCallback callback;
-    void* context;
-} SwireUsbRxLineDelegate;
+typedef void (*SwireUsbStateChangeCallback)(void* context, SwireUsb* sender, CdcState state);
 
-SwireUsb* swire_usb_alloc(FuriEventLoop* event_loop);
+SwireUsb* swire_usb_alloc(FuriEventLoop* event_loop, uint32_t thread_flag);
 void swire_usb_free(SwireUsb* self);
 void swire_usb_set_on_rx_line(SwireUsb* self, SwireUsbRxLineCallback callback, void* context);
+void swire_usb_set_on_state_change(
+    SwireUsb* self,
+    SwireUsbStateChangeCallback callback,
+    void* context);
 
 FuriStatus swire_usb_printf(SwireUsb* self, const char* format, ...);
 FuriStatus swire_usb_printf_line(SwireUsb* self, const char* format, ...);
@@ -28,7 +30,11 @@ FuriStatus swire_usb_write_str(SwireUsb* self, FuriString* msg);
 FuriStatus swire_usb_writeline_cstr(SwireUsb* self, const char* msg);
 FuriStatus swire_usb_writeline_str(SwireUsb* self, FuriString* msg);
 FuriStatus swire_usb_write_flush(SwireUsb* self);
-bool swire_usb_set_flush_auto(SwireUsb* self, bool flush_auto);
+bool swire_usb_set_auto_flush(SwireUsb* self, bool flush_auto);
 
 FuriStatus swire_usb_read(SwireUsb* self, uint8_t* buffer, uint32_t buffer_size);
 FuriStatus swire_usb_readline_str(SwireUsb* self, FuriString* output);
+
+uint32_t swire_usb_get_debug_value(SwireUsb* self);
+CdcState swire_usb_get_cdc_state(SwireUsb* self);
+void swire_usb_pull_debug_data(SwireUsb* self);

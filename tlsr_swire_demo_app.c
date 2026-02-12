@@ -7,34 +7,84 @@
 #include "src/swire/swire_bitbang.h"
 #include "src/swire/swire_uart.h"
 #include "src/usb.h"
+#include "src/timerpool.h"
+#include "src/rgb.h"
+#include "src/global_debug.h"
 
-// For list of pins see https://github.com/flipperdevices/flipperzero-firmware/blob/dev/firmware/targets/f7/furi_hal/furi_hal_resources.c
-const GpioPin* const pin_sws = &gpio_ext_pa7;
-const GpioPin* const pin_back = &gpio_button_back;
+#define MY_LOG_I(format, ...) FURI_LOG_I("swire", format, ##__VA_ARGS__)
+#define IMAGE_LEN             144000
+//#define IMAGE_LEN 16
 
 typedef struct {
     SwireUsb* usb;
-    FuriThread* thread;
     FuriEventLoop* event_loop;
     bool running;
     uint32_t last_tick;
-    FuriEventLoopTimer* timer;
+    TimerPool* timers;
+    FuriEventLoopTimer* timer_led;
+
+    bool led_state;
+    uint32_t led_color;
+    FuriString* message;
+    FuriString* message2;
+    ViewPort* view_port;
+
+    uint32_t debug_value;
+    uint32_t debug_value_to_show;
 } SwireApp;
-SwireApp* app = NULL;
+
+typedef enum {
+    BlinkerStateOff,
+    BlinkerStateIdle,
+    BlinkerStateConnected,
+    BlinkerStateTimeout,
+    BlinkerStateError,
+    BlinkerStateSolidWhite,
+} BlinkerState;
+
+typedef void (*SwireAppCallback)(SwireApp* app);
 
 void my_stop_loop();
-void handle_usb_rx_line(void* context, SwireUsb* sender, FuriString* line);
+static void handle_usb_rx_line(void* context, SwireUsb* sender, FuriString* line);
+static void handle_command(SwireApp* context, FuriString* cmd);
+void app_set_blinker(SwireApp* app, uint32_t color, uint32_t interval_ms);
+void app_set_blinker_state(SwireApp* app, BlinkerState state);
+void app_set_message(SwireApp* app, const char* format, ...);
+void app_set_timer(
+    SwireApp* app,
+    uint32_t interval_ms,
+    FuriEventLoopTimerType type,
+    SwireAppCallback callback);
+
+const GpioPin* const pin_sws = &gpio_ext_pa7;
+const GpioPin* const pin_back = &gpio_button_back;
+SwireApp* app = NULL;
+const char APP_VERSION[] = "0.2";
 
 static void my_draw_callback(Canvas* canvas, void* context) {
-    UNUSED(context);
+    SwireApp* app = (SwireApp*)context;
+    UNUSED(app);
     canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str(canvas, 5, 8, "TLSR SWIRE");
-    //FuriString* str_ticks = furi_string_alloc_vprintf("%d", last_tick);
-    //canvas_draw_str(canvas, 5, 16, furi_string_get_cstr(str));
-    //furi_string_free(str_ticks);
-}
+    FuriString* str = furi_string_alloc();
 
-#define MY_LOG_I(format, ...) FURI_LOG_I("swire", format, ##__VA_ARGS__)
+    //canvas_draw_str(canvas, 5, 8, "TLSR SWIRE");
+    furi_string_printf(
+        str,
+        "i: %04lx %04lx %04lx",
+        global_debug()->irq_rx_ts & 0xffff,
+        global_debug()->irq_rx_before,
+        global_debug()->irq_rx_after);
+    canvas_draw_str(canvas, 2, 8, furi_string_get_cstr(str));
+    furi_string_printf(str, "  %08lx", global_debug()->irq_rx_status);
+    canvas_draw_str(canvas, 2, 18, furi_string_get_cstr(str));
+    furi_string_printf(str, "e: %ld %08lx", global_debug()->err_loc, global_debug()->err);
+    canvas_draw_str(canvas, 2, 28, furi_string_get_cstr(str));
+
+    for(int i = 0; i < 6; i++) {
+        canvas_draw_str(canvas, 6, 38 + i * 10, furi_string_get_cstr(global_debug()->logs[i]));
+    }
+    furi_string_free(str);
+}
 
 void do_read() {
     int32_t row[16];
@@ -130,8 +180,6 @@ void do_by_uart_dumploop(SwireUart* swire) {
     uint8_t* buffer = malloc(256);
     furi_check(buffer);
 
-#define IMAGE_LEN 144000
-    //#define IMAGE_LEN 16
     for(uint32_t addr = 0; addr < IMAGE_LEN; addr += 16) {
         uint32_t baddr = addr & 0xff;
         if(baddr == 0) {
@@ -216,9 +264,101 @@ void do_by_uart() {
     SWIRE_UART_FREE(swire);
 }
 
-void loop_iteration(void* ctx) {
+void app_set_blinker_state(SwireApp* app, BlinkerState state) {
+    switch(state) {
+    case BlinkerStateOff:
+        app_set_blinker(app, 0, 0);
+        break;
+    case BlinkerStateIdle:
+        app_set_blinker(app, 0x0000ff, 2000);
+        break;
+    case BlinkerStateConnected:
+        app_set_blinker(app, 0x00ff00, 1000);
+        break;
+    case BlinkerStateTimeout:
+        app_set_blinker(app, 0xff00ff, 1000);
+        break;
+    case BlinkerStateSolidWhite:
+        app_set_blinker(app, 0xffffff, 0);
+        break;
+    case BlinkerStateError:
+        app_set_blinker(app, 0xff0000, 500);
+        break;
+    default:
+        app_set_blinker(app, 0xff0000, 0);
+        break;
+    }
+}
+
+void app_send_welcome(SwireApp* app) {
+    FuriStatus status = swire_usb_printf_line(app->usb, "swire_demo welcome v%s", APP_VERSION);
+    if(status & FuriFlagError) {
+        switch(status) {
+        case FuriStatusErrorTimeout:
+            app_set_message(app, "tx timeout");
+            app_set_blinker_state(app, BlinkerStateTimeout);
+            break;
+        default:
+            app_set_message(app, "unknown err");
+            app_set_blinker_state(app, BlinkerStateError);
+            break;
+        }
+    }
+}
+
+void app_handle_cdc_state_changed(void* ctx, SwireUsb* sender, CdcState state) {
+    UNUSED(sender);
     SwireApp* app = (SwireApp*)ctx;
-    swire_usb_write_cstr(app->usb, "beat\r\n");
+    switch(state) {
+    case CdcStateConnected:
+        app_set_blinker_state(app, BlinkerStateConnected);
+        app_set_message(app, "cdc connected");
+        app_set_timer(app, 1000, FuriEventLoopTimerTypeOnce, app_send_welcome);
+        break;
+    case CdcStateDisconnected:
+        app_set_blinker_state(app, BlinkerStateIdle);
+        app_set_message(app, "cdc disconnected");
+        break;
+    default:
+        app_set_message(app, "unknown cdc state");
+        app_set_blinker_state(app, BlinkerStateError);
+        break;
+    }
+}
+void app_handle_led_blinker(void* context) {
+    SwireApp* app = (SwireApp*)context;
+    app->led_state = !app->led_state;
+
+    set_led_color(app->led_state ? app->led_color : 0);
+}
+
+void app_handle_periodic_debug_info(SwireApp* app) {
+    swire_usb_pull_debug_data(app->usb);
+    uint32_t d = swire_usb_get_debug_value(app->usb);
+    app_set_message(app, "d: %08x %d", d, d);
+    view_port_update(app->view_port);
+}
+
+void app_set_message(SwireApp* app, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    furi_string_vprintf(app->message, format, args);
+    va_end(args);
+    view_port_update(app->view_port);
+}
+
+void app_set_blinker(SwireApp* app, uint32_t color, uint32_t interval_ms) {
+    if(interval_ms == 0) {
+        furi_event_loop_timer_stop(app->timer_led);
+        set_led_color(color);
+    } else {
+        furi_event_loop_timer_start(app->timer_led, interval_ms / 2);
+    }
+    app->led_color = color;
+}
+
+void loop_iteration(SwireApp* app) {
+    UNUSED(app);
 
     if(!furi_hal_gpio_read(&gpio_button_back)) {
         furi_delay_ms(300);
@@ -247,67 +387,134 @@ SwireApp* app_alloc() {
     SwireApp* self = malloc(sizeof(SwireApp));
     furi_check(self, "app_alloc");
     self->running = true;
+    self->led_state = false;
+    self->message = furi_string_alloc();
+    self->message2 = furi_string_alloc();
     self->last_tick = swire_clock_get_real_tick();
     self->event_loop = furi_event_loop_alloc();
-    self->thread = furi_thread_get_current();
-    self->timer = furi_event_loop_timer_alloc(
-        self->event_loop, loop_iteration, FuriEventLoopTimerTypePeriodic, self);
-    furi_event_loop_timer_start(self->timer, 1000);
+    self->timers = timerpool_alloc(self->event_loop);
+    self->timer_led = furi_event_loop_timer_alloc(
+        self->event_loop, app_handle_led_blinker, FuriEventLoopTimerTypePeriodic, self);
+
+    //self->timer_poll = furi_event_loop_timer_alloc(
+    //    self->event_loop,
+    //    (FuriEventLoopTimerCallback)loop_iteration,
+    //    FuriEventLoopTimerTypePeriodic,
+    //    self);
+    //self->timer_debug = furi_event_loop_timer_alloc(
+    //    self->event_loop,
+    //    (FuriEventLoopTimerCallback)app_handle_periodic_debug_info,
+    //    FuriEventLoopTimerTypePeriodic,
+    //    self);
     self->usb = NULL;
-    self->usb = swire_usb_alloc(self->event_loop);
-    swire_usb_set_on_rx_line(self->usb, handle_usb_rx_line, self);
+
     return self;
+}
+
+void app_init(SwireApp* self, ViewPort* view_port) {
+    self->view_port = view_port;
+    app_set_blinker_state(self, BlinkerStateIdle);
+    if(self->usb != NULL) swire_usb_free(self->usb);
+    self->usb = swire_usb_alloc(self->event_loop, 8);
+    swire_usb_set_on_rx_line(self->usb, handle_usb_rx_line, self);
+    swire_usb_set_on_state_change(self->usb, app_handle_cdc_state_changed, self);
+
+    //furi_event_loop_timer_start(app->timer_poll, 50);
+    //furi_event_loop_timer_start(app->timer_debug, 250);
+    app_set_timer(app, 50, FuriEventLoopTimerTypePeriodic, loop_iteration);
+    app_set_timer(app, 250, FuriEventLoopTimerTypePeriodic, app_handle_periodic_debug_info);
+}
+
+void app_deinit(SwireApp* self) {
+    swire_usb_free(self->usb);
+    self->usb = NULL;
+    if(self->timer_led != NULL) furi_event_loop_timer_free(self->timer_led);
+    self->timer_led = NULL;
+    timerpool_free(self->timers);
+    self->timers = NULL;
 }
 
 void app_free(SwireApp* self) {
     if(self == NULL) return;
-    furi_event_loop_timer_free(self->timer);
+
+    if(self->timer_led != NULL) furi_event_loop_timer_free(self->timer_led);
+    //if(self->timer_poll != NULL) furi_event_loop_timer_free(self->timer_poll);
+    //if(self->timer_debug != NULL) furi_event_loop_timer_free(self->timer_debug);
+    timerpool_free(self->timers);
     swire_usb_free(self->usb);
     furi_event_loop_free(self->event_loop);
+    furi_string_free(self->message);
+    furi_string_free(self->message2);
+    free(self);
 }
 
-void handle_usb_rx_line(void* context, SwireUsb* sender, FuriString* line) {
-    UNUSED(sender);
-    UNUSED(line);
-    SwireApp* app = (SwireApp*)context;
+void app_set_timer(
+    SwireApp* app,
+    uint32_t interval_ms,
+    FuriEventLoopTimerType type,
+    SwireAppCallback callback) {
+    timerpool_submit(app->timers, interval_ms, type, (FuriEventLoopTimerCallback)callback, app);
+}
+
+void handle_command(SwireApp* app, FuriString* cmd) {
     SwireUsb* usb = app->usb;
 
-    swire_usb_printf_line(usb, " > %s", line);
-    if(furi_string_equal(line, "swire_demo info")) {
+    swire_usb_printf_line(usb, " > %s", cmd);
+    if(furi_string_equal(cmd, "swire_demo info") || furi_string_equal(cmd, "info")) {
         swire_usb_printf_line(usb, "swire_demo info response start");
         swire_usb_printf_line(usb, "version=v0.2");
         swire_usb_printf_line(usb, "bitrate=TODO");
         swire_usb_printf_line(usb, "trigger_delay=TODO");
         swire_usb_printf_line(usb, "end");
+        return;
     }
 
-    if(furi_string_equal(line, "send hex")) {
-        swire_usb_readline_str(usb, line);
-        swire_usb_printf_line(usb, "send hex request received %d", furi_string_utf8_length(line));
+    if(furi_string_equal(cmd, "close")) {
+        swire_usb_printf_line(usb, "ok");
+        furi_event_loop_stop(app->event_loop);
+        return;
     }
+
+    if(furi_string_equal(cmd, "send hex")) {
+        swire_usb_readline_str(usb, cmd);
+        swire_usb_printf_line(usb, "send hex request received %d", furi_string_utf8_length(cmd));
+        return;
+    }
+}
+
+static void handle_usb_rx_line(void* context, SwireUsb* sender, FuriString* line) {
+    UNUSED(sender);
+    UNUSED(line);
+    SwireApp* app = (SwireApp*)context;
+    handle_command(app, line);
 }
 
 int tlsr_swire_demo_app(void* p) {
     UNUSED(p);
 
+    global_debug_init();
     swire_bitbang_global_init();
 
+    app = app_alloc();
     // Show directions to user.
     Gui* gui = furi_record_open(RECORD_GUI);
     ViewPort* view_port = view_port_alloc();
     view_port_draw_callback_set(view_port, my_draw_callback, app);
     gui_add_view_port(gui, view_port, GuiLayerFullscreen);
-    furi_delay_ms(1000);
+    furi_delay_ms(1000); // ufbt freezes if we immediately hog the cli
 
-    app = app_alloc();
+    app_init(app, view_port);
     furi_event_loop_run(app->event_loop);
-    app_free(app);
+    app_deinit(app);
 
     // Typically when a pin is no longer in use, it is set to analog mode.
     furi_hal_gpio_init_simple(pin_sws, GpioModeAnalog);
 
     // Remove the directions from the screen.
     gui_remove_view_port(gui, view_port);
+    app_free(app);
+    set_led_color(0);
 
+    global_debug_deinit();
     return 0;
 }
