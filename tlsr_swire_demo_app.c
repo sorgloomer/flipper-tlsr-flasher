@@ -33,6 +33,8 @@ typedef struct {
     FuriString* message;
     FuriString* message2;
     FuriString* command;
+    FuriString* tmp_str1;
+    FuriString* tmp_str2;
     ViewPort* view_port;
 
     uint32_t debug_value;
@@ -67,31 +69,83 @@ void handle_app_message(FuriEventLoopObject* object, void* ctx);
 const GpioPin* const pin_sws = &gpio_ext_pa7;
 const GpioPin* const pin_back = &gpio_button_back;
 SwireApp* app = NULL;
-const char APP_VERSION[] = "0.2";
+const char APP_VERSION[] = "0.3";
 
+uint32_t app_get_all_event_flag_values(SwireApp* app) {
+    if(app == NULL) return 0;
+    SwireUsb* usb = app->usb;
+    if(usb == NULL) return 0;
+    uint32_t result = 0;
+    {
+        FuriEventFlag* flag = swire_usb_get_event_flag_rx(usb);
+        if(flag != NULL) result |= furi_event_flag_get(flag);
+    }
+    {
+        FuriEventFlag* flag = swire_usb_get_event_flag_tx(usb);
+        if(flag != NULL) result |= furi_event_flag_get(flag);
+    }
+    return result;
+}
+
+void hex(FuriString* output, FuriString* input, bool whitespace) {
+    furi_string_reset(output);
+
+    for(int32_t i = 0, len = furi_string_size(input); i < len; i++) {
+        char c = furi_string_get_char(input, i);
+        furi_string_cat_printf(
+            output, (i == 0 || !whitespace) ? "%02x" : " %02x", (unsigned int)c);
+    }
+}
 static void my_draw_callback(Canvas* canvas, void* context) {
     SwireApp* app = (SwireApp*)context;
     UNUSED(app);
+    int line = 0;
     canvas_set_font(canvas, FontPrimary);
-    FuriString* str = furi_string_alloc();
+    FuriString* str = app->tmp_str1;
+    FuriString* str2 = app->tmp_str2;
 
     //canvas_draw_str(canvas, 5, 8, "TLSR SWIRE");
     furi_string_printf(
         str,
-        "i: %04lx %04lx %04lx",
+        "i: %04lx %04lx %04lx %ld",
         global_debug()->irq_rx_ts & 0xffff,
         global_debug()->irq_rx_before,
-        global_debug()->irq_rx_after);
-    canvas_draw_str(canvas, 2, 8, furi_string_get_cstr(str));
-    furi_string_printf(str, "  %08lx", global_debug()->irq_rx_status);
-    canvas_draw_str(canvas, 2, 18, furi_string_get_cstr(str));
-    furi_string_printf(str, "e: %ld %08lx", global_debug()->err_loc, global_debug()->err);
-    canvas_draw_str(canvas, 2, 28, furi_string_get_cstr(str));
+        global_debug()->irq_rx_after,
+        global_debug()->irq_rx);
+    canvas_draw_str(canvas, 2, 8 + 10 * line, furi_string_get_cstr(str));
+    line++;
 
-    for(int i = 0; i < 6; i++) {
-        canvas_draw_str(canvas, 6, 38 + i * 10, furi_string_get_cstr(global_debug()->logs[i]));
-    }
-    furi_string_free(str);
+    furi_string_printf(
+        str,
+        "irq: %08lx flag: %04lx",
+        global_debug()->irq_rx_status,
+        app_get_all_event_flag_values(app));
+    canvas_draw_str(canvas, 2, 8 + 10 * line, furi_string_get_cstr(str));
+    line++;
+
+    furi_string_printf(str, "err: l:%ld %08lx", global_debug()->err_loc, global_debug()->err);
+    canvas_draw_str(canvas, 2, 8 + 10 * line, furi_string_get_cstr(str));
+    line++;
+
+    furi_string_printf(
+        str,
+        "evt: %ld %ld %ld / %ld",
+        global_debug()->evt_0,
+        global_debug()->evt_rx,
+        global_debug()->evt_sc,
+        global_debug()->evt_t);
+    canvas_draw_str(canvas, 2, 8 + 10 * line, furi_string_get_cstr(str));
+    line++;
+
+    furi_string_printf(
+        str, "m1: %s tc: %ld", furi_string_get_cstr(app->message), global_debug()->rx_trace);
+    canvas_draw_str(canvas, 2, 8 + 10 * line, furi_string_get_cstr(str));
+    line++;
+
+    hex(str2, app->command, false);
+    furi_string_printf(str, "chx: %s", furi_string_get_cstr(str2));
+    canvas_draw_str(canvas, 2, 8 + 10 * line, furi_string_get_cstr(str));
+    line++;
 }
 
 void do_read() {
@@ -341,9 +395,6 @@ void app_handle_led_blinker(void* context) {
 }
 
 void app_handle_periodic_debug_info(SwireApp* app) {
-    swire_usb_pull_debug_data(app->usb);
-    uint32_t d = swire_usb_get_debug_value(app->usb);
-    app_set_message(app, "d: %08x %d", d, d);
     view_port_update(app->view_port);
 }
 
@@ -369,6 +420,7 @@ void loop_iteration(SwireApp* app) {
     UNUSED(app);
 
     if(!furi_hal_gpio_read(&gpio_button_back)) {
+        furi_string_set(app->command, "back button");
         furi_delay_ms(300);
         my_stop_loop();
     }
@@ -384,6 +436,16 @@ void loop_iteration(SwireApp* app) {
     if(!furi_hal_gpio_read(&gpio_button_up)) {
         do_by_uart();
     }
+
+#if SW_USB_USE_POLLING_WORKAROUND == 1
+    if(app->usb) {
+        FuriEventFlag* flag = swire_usb_get_event_flag_rx(app->usb);
+        if(furi_event_flag_get(flag) & SwUsbRxEventAll) {
+            furi_event_flag_clear(flag, SwUsbRxEventDummy);
+            furi_event_flag_set(flag, SwUsbRxEventDummy);
+        }
+    }
+#endif
 }
 
 void my_stop_loop() {
@@ -391,27 +453,39 @@ void my_stop_loop() {
     furi_event_loop_stop(app->event_loop);
 }
 
-void handle_app_message(FuriEventLoopObject* object, void* ctx) {
-    UNUSED(object);
-    SwireApp* app = (SwireApp*)ctx;
-    UNUSED(app);
-}
-
 static void handle_usb_event(FuriEventLoopObject* object, void* context) {
     UNUSED(object);
     SwireApp* app = (SwireApp*)context;
-    SwUsbEvent events = furi_event_flag_wait(
-        swire_usb_get_event_flag(app->usb), SwUsbEventAll, FuriFlagWaitAny, 0);
+    FuriEventFlag* flag = swire_usb_get_event_flag_rx(app->usb);
+    SwUsbRxEvent events = furi_event_flag_clear(flag, SwUsbRxEventAll);
+    // events result had the TxComplete flag even though it is not submitted to furi_event_flag_clear
+    // clear seems to return all old flags, keep just the ones we care about
+    global_debug()->evt_t++;
 
-    if(events & FuriStatusError) {
+    if(events & FuriFlagError) {
+        global_debug()->err_loc = 41;
+        global_debug()->err = events;
         return; // TODO
     }
-    if(events & SwUsbEventStateChange) {
+    if(events == 0) {
+        global_debug()->evt_0++;
+        return;
+    }
+    if(events & SwUsbRxEventStateChange) {
+        global_debug()->evt_sc++;
         app_handle_cdc_state_changed(app, app->usb, swire_usb_get_cdc_state(app->usb));
     }
-    if(events & SwUsbEventRxAvailable) {
-        swire_usb_readline_str(app->usb, app->command);
-        handle_command(app, app->command);
+    if(events & SwUsbRxEventRxAvailable) {
+        global_debug()->evt_rx++;
+        furi_event_flag_set(flag, SwUsbRxEventRxAvailable);
+        FuriStatus status = swire_usb_readline_str(app->usb, app->command);
+        furi_string_printf(app->message, "rls %08x", status);
+        if(status & FuriFlagError) {
+            global_debug()->err_loc = 31;
+            global_debug()->err = status;
+        } else {
+            handle_command(app, app->command);
+        }
     }
 }
 
@@ -422,6 +496,8 @@ SwireApp* app_alloc() {
     self->led_state = false;
     self->message = furi_string_alloc();
     self->message2 = furi_string_alloc();
+    self->tmp_str1 = furi_string_alloc();
+    self->tmp_str2 = furi_string_alloc();
     self->command = furi_string_alloc();
     self->last_tick = swire_clock_get_real_tick();
     //self->queue = furi_message_queue_alloc(_QUEUE_CAPACITY, sizeof(SwMessage));
@@ -462,13 +538,21 @@ void app_init(SwireApp* self, ViewPort* view_port) {
     //    self->event_loop, self->queue, FuriEventLoopEventIn, handle_app_message, app);
     furi_event_loop_subscribe_event_flag(
         self->event_loop,
-        swire_usb_get_event_flag(self->usb),
+        swire_usb_get_event_flag_rx(self->usb),
         FuriEventLoopEventIn,
         handle_usb_event,
         app);
+    // furi_event_loop_subscribe_message_queue(
+    //     self->event_loop,
+    //     swire_usb_get_queue(self->usb),
+    //     FuriEventLoopEventIn,
+    //     handle_usb_event,
+    //     app);
 }
 
 void app_deinit(SwireApp* self) {
+    furi_event_loop_unsubscribe(self->event_loop, swire_usb_get_event_flag_rx(self->usb));
+    // furi_event_loop_unsubscribe(self->event_loop, swire_usb_get_queue(self->usb));
     swire_usb_free(self->usb);
     self->usb = NULL;
     if(self->timer_led != NULL) furi_event_loop_timer_free(self->timer_led);
@@ -488,6 +572,8 @@ void app_free(SwireApp* self) {
     furi_event_loop_free(self->event_loop);
     furi_string_free(self->message);
     furi_string_free(self->message2);
+    furi_string_free(self->tmp_str1);
+    furi_string_free(self->tmp_str2);
     furi_string_free(self->command);
     // furi_event_loop_unsubscribe(self->event_loop, self->queue);
     // furi_message_queue_free(self->queue);
@@ -509,7 +595,7 @@ void handle_command(SwireApp* app, FuriString* cmd) {
     swire_usb_printf_line(usb, " > %s", cmd);
     if(furi_string_equal(cmd, "swire_demo info") || furi_string_equal(cmd, "info")) {
         swire_usb_printf_line(usb, "swire_demo info response start");
-        swire_usb_printf_line(usb, "version=v0.2");
+        swire_usb_printf_line(usb, "version=v%s", APP_VERSION);
         swire_usb_printf_line(usb, "bitrate=TODO");
         swire_usb_printf_line(usb, "trigger_delay=TODO");
         swire_usb_printf_line(usb, "end");
@@ -523,7 +609,12 @@ void handle_command(SwireApp* app, FuriString* cmd) {
     }
 
     if(furi_string_equal(cmd, "send hex")) {
-        swire_usb_readline_str(usb, cmd);
+        FuriStatus status = swire_usb_readline_str(usb, cmd);
+        if(status & FuriFlagError) {
+            global_debug()->err_loc = 31;
+            global_debug()->err = status;
+            return;
+        }
         swire_usb_printf_line(usb, "send hex request received %d", furi_string_utf8_length(cmd));
         return;
     }

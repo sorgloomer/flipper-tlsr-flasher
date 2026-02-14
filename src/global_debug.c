@@ -20,6 +20,7 @@ void global_debug_deinit() {
 void global_debug_init() {
     global_debug_deinit();
     global_debug_value = malloc(sizeof(GlobalDebugInfo));
+    memset(global_debug_value, 0, sizeof(GlobalDebugInfo));
     global_debug_value->log_capacity = 10;
     global_debug_value->logs = malloc(sizeof(FuriString*) * global_debug_value->log_capacity);
     for(uint32_t i = 0; i < global_debug_value->log_capacity; i++) {
