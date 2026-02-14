@@ -45,6 +45,8 @@ SwireBitbang* swire_bitbang_alloc_with_sws(const GpioPin* pin_sws_i, const GpioP
 }
 
 void swire_bitbang_free(SwireBitbang* swire) {
+    if(swire == NULL) return;
+    free(swire->tickbuffer);
     free(swire);
 }
 
@@ -57,6 +59,7 @@ static void _swire_bitbang_init_with_sws(
 
     swire->timeout_byte_ticks = _unit_ticks * 5 * 10 * 10;
     swire->error = SwireBitbangErrorNone;
+    swire->tickbuffer = malloc(_TICKBUFFER_SIZE * sizeof(*swire->tickbuffer));
 
     furi_hal_gpio_write(swire->pin_sws_i, true);
     furi_hal_gpio_init(swire->pin_sws_i, GpioModeInput, GpioPullUp, GpioSpeedVeryHigh);
@@ -104,78 +107,40 @@ void _swire_bitbang_write_bitsn(SwireBitbang* swire, uint32_t bits, int count) {
     swire->next_unit_tick = tick + _unit_ticks_backoff;
 }
 
-void _swire_bitbang_write_bits9(SwireBitbang* swire, uint32_t bits) {
-    const GpioPin* pin_sws_o = swire->pin_sws_o;
-    uint32_t xor_a, xor_b;
-    uint32_t ts_1 = _unit_ticks;
-    uint32_t ts_4 = _unit_ticks * 4;
-    uint32_t ts_sw = ts_1 ^ ts_4;
+#define CLK (DWT->CYCCNT)
 
-    xor_a = (bits >> 8) & 1;
-    xor_a *= ts_sw;
+void _swire_bitbang_write_bits9(SwireBitbang* self, uint32_t bits) {
+    UNUSED(bits); // TODO
+    const GpioPin* pin_sws_o = self->pin_sws_o;
+    uint32_t pin_mask = pin_sws_o->pin;
+    uint32_t pin_mask_i = ~pin_mask;
+    volatile uint32_t* odr = &pin_sws_o->port->ODR;
 
-    swire_bitbang_timer_continue(swire);
+    swire_bitbang_timer_continue(self);
+
+    int32_t* sample = self->tickbuffer;
+    furi_check(20 <= _TICKBUFFER_SIZE);
+    for(int i = 0; i < 20; i++) {
+        sample[i] = i * 5;
+    }
+
+    int32_t* samples_end = self->tickbuffer + 20;
     __disable_irq();
-
-    uint32_t tick = swire_clock_get_real_tick();
-    furi_hal_gpio_write(pin_sws_o, false);
-    xor_b = (bits >> 7) & 1;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_a);
-    furi_hal_gpio_write(pin_sws_o, true);
-    xor_b *= ts_sw;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_a);
-    furi_hal_gpio_write(pin_sws_o, false);
-    xor_a = (bits >> 6) & 1;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_b);
-    furi_hal_gpio_write(pin_sws_o, true);
-    xor_a *= ts_sw;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_b);
-    furi_hal_gpio_write(pin_sws_o, false);
-    xor_b = (bits >> 5) & 1;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_a);
-    furi_hal_gpio_write(pin_sws_o, true);
-    xor_b *= ts_sw;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_a);
-    furi_hal_gpio_write(pin_sws_o, false);
-    xor_a = (bits >> 4) & 1;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_b);
-    furi_hal_gpio_write(pin_sws_o, true);
-    xor_a *= ts_sw;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_b);
-    furi_hal_gpio_write(pin_sws_o, false);
-    xor_b = (bits >> 3) & 1;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_a);
-    furi_hal_gpio_write(pin_sws_o, true);
-    xor_b *= ts_sw;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_a);
-    furi_hal_gpio_write(pin_sws_o, false);
-    xor_a = (bits >> 2) & 1;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_b);
-    furi_hal_gpio_write(pin_sws_o, true);
-    xor_a *= ts_sw;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_b);
-    furi_hal_gpio_write(pin_sws_o, false);
-    xor_b = (bits >> 1) & 1;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_a);
-    furi_hal_gpio_write(pin_sws_o, true);
-    xor_b *= ts_sw;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_a);
-    furi_hal_gpio_write(pin_sws_o, false);
-    xor_a = (bits >> 0) & 1;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_b);
-    furi_hal_gpio_write(pin_sws_o, true);
-    xor_a *= ts_sw;
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_b);
-    furi_hal_gpio_write(pin_sws_o, false);
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_1 ^ xor_a);
-    furi_hal_gpio_write(pin_sws_o, true);
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, ts_4 ^ xor_a);
-    furi_hal_gpio_write(pin_sws_o, false);
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, _unit_ticks);
-    furi_hal_gpio_write(pin_sws_o, true);
+    int32_t clkstart = CLK + 10;
+    while(sample != samples_end) {
+        // Important to balance the relation so that 0 is on one side to keep
+        // integer overflows predictable
+        while((int32_t)CLK - (*sample) - clkstart > 0)
+            ;
+        *odr &= pin_mask_i;
+        sample++;
+        while((int32_t)CLK - (*sample) - clkstart > 0)
+            ;
+        *odr |= pin_mask;
+        sample++;
+    }
     __enable_irq();
-
-    swire->next_unit_tick = tick + _unit_ticks_backoff;
+    self->next_unit_tick = CLK + _unit_ticks_backoff;
 }
 
 void swire_bitbang_transaction_start(

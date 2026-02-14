@@ -1,14 +1,12 @@
 #pragma once
 
+#include "src/buildconf.h"
 #include "furi_hal_usb_cdc.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <furi.h>
 #include <toolbox/api_lock.h>
 #include <cli/cli_vcp.h>
-
-#define SW_USB_USE_QUEUE              1
-#define SW_USB_USE_POLLING_WORKAROUND 1
 
 typedef enum WorkerEventFlags WorkerEventFlags;
 

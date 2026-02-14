@@ -454,6 +454,14 @@ static void vcp_irq_on_cdc_rx(void* context) {
 #if SW_USB_USE_QUEUE == 1
     furi_message_queue_put(self->queue, &msg, 0);
 #endif
+#if SW_USB_USE_IRQDUMMY_WORKAROUND == 1
+    furi_event_flag_clear(self->event_flag_rx, SwUsbRxEventDummy);
+    furi_event_flag_set(self->event_flag_rx, SwUsbRxEventDummy);
+#endif
+#if SW_USB_USE_DOUBLESET_WORKAROUND == 1
+    furi_event_flag_clear(self->event_flag_rx, SwUsbRxEventRxAvailable);
+    furi_event_flag_set(self->event_flag_rx, SwUsbRxEventRxAvailable);
+#endif
 }
 
 static void vcp_irq_state_callback(void* context, CdcState state) {

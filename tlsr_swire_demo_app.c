@@ -1,59 +1,27 @@
 #include <furi.h>
 #include <furi_hal.h>
 #include <furi/core/string.h>
-#include <gui/gui.h>
 
+#include <gui/gui.h>
+#include <gui/modules/variable_item_list.h>
+
+#include "src/buildconf.h"
+#include "src/app.h"
+#include "src/commands/commands.h"
+#include "src/commands/commands_bitbang.h"
+#include "src/commands/commands_uart.h"
 #include "src/swire/swire_clock.h"
 #include "src/swire/swire_bitbang.h"
-#include "src/swire/swire_uart.h"
 #include "src/usb.h"
 #include "src/timerpool.h"
 #include "src/rgb.h"
 #include "src/global_debug.h"
+#include "src/utils/hex.h"
 
 #define SW_LOG_I(format, ...) FURI_LOG_I("swire", format, ##__VA_ARGS__)
-#define SW_IMAGE_LEN          144000 // 16
 #define SW_QUEUE_CAPACITY     32
 
-typedef enum {
-    SwMessageNone,
-    SwMessageRx,
-} SwMessage;
-typedef struct {
-    SwireUsb* usb;
-    FuriEventLoop* event_loop;
-    // FuriMessageQueue* queue;
-    bool running;
-    uint32_t last_tick;
-    TimerPool* timers;
-    FuriEventLoopTimer* timer_led;
-
-    bool led_state;
-    uint32_t led_color;
-    FuriString* message;
-    FuriString* message2;
-    FuriString* command;
-    FuriString* tmp_str1;
-    FuriString* tmp_str2;
-    ViewPort* view_port;
-
-    uint32_t debug_value;
-    uint32_t debug_value_to_show;
-} SwireApp;
-
-typedef enum {
-    BlinkerStateOff,
-    BlinkerStateIdle,
-    BlinkerStateConnected,
-    BlinkerStateTimeout,
-    BlinkerStateError,
-    BlinkerStateSolidWhite,
-} BlinkerState;
-
-typedef void (*SwireAppCallback)(SwireApp* app);
-
-void my_stop_loop();
-static void handle_command(SwireApp* context, FuriString* cmd);
+void global_stop_loop();
 void app_set_blinker(SwireApp* app, uint32_t color, uint32_t interval_ms);
 void app_set_blinker_state(SwireApp* app, BlinkerState state);
 void app_set_message(SwireApp* app, const char* format, ...);
@@ -70,7 +38,6 @@ void app_handle_rx_one(SwireApp* app);
 const GpioPin* const pin_sws = &gpio_ext_pa7;
 const GpioPin* const pin_back = &gpio_button_back;
 SwireApp* app = NULL;
-const char APP_VERSION[] = "0.3";
 
 uint32_t app_get_all_event_flag_values(SwireApp* app) {
     if(app == NULL) return 0;
@@ -88,15 +55,6 @@ uint32_t app_get_all_event_flag_values(SwireApp* app) {
     return result;
 }
 
-void hex(FuriString* output, FuriString* input, bool whitespace) {
-    furi_string_reset(output);
-
-    for(int32_t i = 0, len = furi_string_size(input); i < len; i++) {
-        char c = furi_string_get_char(input, i);
-        furi_string_cat_printf(
-            output, (i == 0 || !whitespace) ? "%02x" : " %02x", (unsigned int)c);
-    }
-}
 static void my_draw_callback(Canvas* canvas, void* context) {
     SwireApp* app = (SwireApp*)context;
     UNUSED(app);
@@ -147,184 +105,6 @@ static void my_draw_callback(Canvas* canvas, void* context) {
     furi_string_printf(str, "chx: %s", furi_string_get_cstr(str2));
     canvas_draw_str(canvas, 2, 8 + 10 * line, furi_string_get_cstr(str));
     line++;
-}
-
-void do_read() {
-    int32_t row[16];
-
-    SwireBitbang* swire = swire_bitbang_alloc_with_sws(&gpio_ext_pa7, &gpio_ext_pa6);
-
-    swire_bitbang_transaction_start(swire, 0x0602, SwireBitbangRwWrite, 0);
-    swire_bitbang_byte_write(swire, 0x05);
-    swire_bitbang_transaction_end(swire);
-    swire_bitbang_transaction_start(swire, 0x00b2, SwireBitbangRwWrite, 0);
-    swire_bitbang_byte_write(swire, 0x7f);
-    swire_bitbang_transaction_end(swire);
-    swire_bitbang_transaction_start(swire, 0x00b2, SwireBitbangRwRead, 0);
-    int32_t b1 = swire_bitbang_byte_read(swire);
-    UNUSED(b1); // sanity check
-    swire_bitbang_transaction_end(swire);
-
-    furi_delay_ms(50);
-
-    swire_bitbang_transaction_start(swire, 0x0d, SwireBitbangRwWrite, 0);
-    swire_bitbang_byte_write(swire, 0);
-    swire_bitbang_transaction_end(swire);
-
-    swire_bitbang_transaction_start(swire, 0x0c, SwireBitbangRwWrite, 0);
-    swire_bitbang_byte_write(swire, 0x03);
-    swire_bitbang_transaction_end(swire);
-
-    swire_bitbang_transaction_start(swire, 0x0c, SwireBitbangRwWrite, 0);
-    swire_bitbang_byte_write(swire, 0x00);
-    swire_bitbang_transaction_end(swire);
-
-    swire_bitbang_transaction_start(swire, 0x0c, SwireBitbangRwWrite, 0);
-    swire_bitbang_byte_write(swire, 0x00);
-    swire_bitbang_transaction_end(swire);
-
-    swire_bitbang_transaction_start(swire, 0x0c, SwireBitbangRwWrite, 0);
-    swire_bitbang_byte_write(swire, 0x00);
-    swire_bitbang_transaction_end(swire);
-
-    swire_bitbang_transaction_start(swire, 0x0c, SwireBitbangRwWrite, 0);
-    swire_bitbang_byte_write(swire, 0x00);
-    swire_bitbang_byte_write(swire, 0x0a);
-    swire_bitbang_transaction_end(swire);
-
-    swire_bitbang_transaction_start(swire, 0xb3, SwireBitbangRwWrite, 0);
-    swire_bitbang_byte_write(swire, 0x80);
-    swire_bitbang_transaction_end(swire);
-    if(swire_bitbang_has_error(swire)) goto exit;
-
-    for(int j = 0; j < 16; j++) {
-        swire_bitbang_transaction_start(swire, 0x0c, SwireBitbangRwRead, 0);
-        for(int i = 0; i < 16; i++) {
-            row[i] = swire_bitbang_byte_read(swire);
-        }
-        swire_bitbang_transaction_end(swire);
-
-        FURI_LOG_I(
-            "swire",
-            "%02x %02x %02x %02x %02x %02x %02x %02x  %02x %02x %02x %02x %02x %02x %02x %02x",
-            (unsigned int)row[0],
-            (unsigned int)row[1],
-            (unsigned int)row[2],
-            (unsigned int)row[3],
-            (unsigned int)row[4],
-            (unsigned int)row[5],
-            (unsigned int)row[6],
-            (unsigned int)row[7],
-            (unsigned int)row[8],
-            (unsigned int)row[9],
-            (unsigned int)row[10],
-            (unsigned int)row[11],
-            (unsigned int)row[12],
-            (unsigned int)row[13],
-            (unsigned int)row[14],
-            (unsigned int)row[15]);
-        furi_delay_ms(1);
-    }
-
-exit:
-    swire_bitbang_transaction_end_force(swire);
-    swire_bitbang_free(swire);
-}
-
-void do_read_top(uint32_t bitrate) {
-    swire_bitbang_global_init_with_bitrate(bitrate);
-    swire_bitbang_global_log_params();
-    do_read();
-    furi_delay_ms(500);
-}
-
-void do_by_uart_dumploop(SwireUart* swire) {
-    FuriString* string = furi_string_alloc();
-    uint8_t* buffer = malloc(256);
-    furi_check(buffer);
-
-    for(uint32_t addr = 0; addr < SW_IMAGE_LEN; addr += 16) {
-        uint32_t baddr = addr & 0xff;
-        if(baddr == 0) {
-            int32_t rest_len = SW_IMAGE_LEN - addr;
-            if(rest_len > 0x100) {
-                rest_len = 0x100;
-            }
-            swire_uart_read(swire, 0x000c, 0, buffer, rest_len);
-        }
-        furi_string_printf(
-            string,
-            "DUMP %06lx:   %02lx %02lx %02lx %02lx",
-            addr,
-            (uint32_t)buffer[baddr + 0],
-            (uint32_t)buffer[baddr + 1],
-            (uint32_t)buffer[baddr + 2],
-            (uint32_t)buffer[baddr + 3]);
-        furi_string_cat_printf(
-            string,
-            " %02lx %02lx %02lx %02lx",
-            (uint32_t)buffer[baddr + 4],
-            (uint32_t)buffer[baddr + 5],
-            (uint32_t)buffer[baddr + 6],
-            (uint32_t)buffer[baddr + 7]);
-        furi_string_cat_printf(
-            string,
-            "  %02lx %02lx %02lx %02lx",
-            (uint32_t)buffer[baddr + 8],
-            (uint32_t)buffer[baddr + 9],
-            (uint32_t)buffer[baddr + 10],
-            (uint32_t)buffer[baddr + 11]);
-        furi_string_cat_printf(
-            string,
-            " %02lx %02lx %02lx %02lx\r\n",
-            (uint32_t)buffer[baddr + 12],
-            (uint32_t)buffer[baddr + 13],
-            (uint32_t)buffer[baddr + 14],
-            (uint32_t)buffer[baddr + 15]);
-        furi_log_puts(furi_string_get_cstr(string));
-    }
-    furi_log_puts("DUMP FINISHED\r\n");
-    free(buffer);
-    furi_string_free(string);
-}
-
-void do_by_uart() {
-    // SwireUart* swire = swire_uart_alloc(921600);
-    SwireUart* swire = swire_uart_alloc(377804);
-    swire->read_delay_per_byte_us = 35;
-    uint8_t cmd[2];
-
-    swire_uart_write1(swire, 0x0602, 0, 0x05); // CPU Stop
-    swire_uart_write1(swire, 0x00b2, 0, 0x7f); // b0-b4 SWIRE
-    int32_t sanity_check = swire_uart_read1(swire, 0x00b2, 0); // b0-b4 SWIRE
-    FURI_LOG_W("swire", "Sanity test...");
-    if(sanity_check != 0x7f) {
-        FURI_LOG_W("swire", "Sanity test failed %02ld", sanity_check);
-    }
-    // MSPI = Memory SPI
-    // CS = Chip Select
-    swire_uart_write1(swire, 0x000d, 0, 0x00); // MSPI Control, CS bit active low
-
-    // addr = Address
-    swire_uart_write1(swire, 0x000c, 0, 0x03); // MSPI Data, 03 = read
-    swire_uart_write1(swire, 0x000c, 0, 0x00); // MSPI read addr[2]
-    swire_uart_write1(swire, 0x000c, 0, 0x00); // MSPI read addr[1]
-    swire_uart_write1(swire, 0x000c, 0, 0x00); // MSPI read addr[0]
-
-    cmd[0] = 0x00; // MSPI Data, 00 to drive MSPI Clock to initiate first read
-    cmd[1] = 0x0a; // MSPI Control, auto read mode
-    swire_uart_write(swire, 0x000c, 0, cmd, 2);
-
-    swire_uart_write1(
-        swire, 0x00b3, 0, 0x80); // swire mode, fifo, repeated reads from same address
-
-    do_by_uart_dumploop(swire);
-
-    swire_uart_write1(swire, 0x00b3, 0, 0x00); // swire mode reset to default
-    swire_uart_write1(swire, 0x000d, 0, 0x01); // MSPI Control disable CS
-
-    furi_delay_ms(500);
-    SWIRE_UART_FREE(swire);
 }
 
 void app_set_blinker_state(SwireApp* app, BlinkerState state) {
@@ -423,16 +203,16 @@ void loop_iteration(SwireApp* app) {
     if(!furi_hal_gpio_read(&gpio_button_back)) {
         furi_string_set(app->command, "back button");
         furi_delay_ms(300);
-        my_stop_loop();
+        global_stop_loop();
     }
     if(!furi_hal_gpio_read(&gpio_button_down)) {
-        do_read_top(75600);
+        cmd_bitbang_read_top(75600);
     }
     if(!furi_hal_gpio_read(&gpio_button_left)) {
         // do_timer_test();
     }
     if(!furi_hal_gpio_read(&gpio_button_right)) {
-        do_read_top(180000);
+        cmd_bitbang_read_top(180000);
     }
     if(!furi_hal_gpio_read(&gpio_button_up)) {
         do_by_uart();
@@ -449,7 +229,7 @@ void loop_iteration(SwireApp* app) {
 #endif
 }
 
-void my_stop_loop() {
+void global_stop_loop() {
     app->running = false;
     furi_event_loop_stop(app->event_loop);
 }
@@ -555,9 +335,13 @@ void app_init(SwireApp* self, ViewPort* view_port) {
     //     FuriEventLoopEventIn,
     //     handle_usb_event,
     //     app);
+
+    self->var_item_list = variable_item_list_alloc();
 }
 
 void app_deinit(SwireApp* self) {
+    variable_item_list_free(self->var_item_list);
+
     furi_event_loop_unsubscribe(self->event_loop, swire_usb_get_event_flag_rx(self->usb));
     // furi_event_loop_unsubscribe(self->event_loop, swire_usb_get_queue(self->usb));
     swire_usb_free(self->usb);
@@ -594,37 +378,6 @@ void app_set_timer(
     FuriEventLoopTimerType type,
     SwireAppCallback callback) {
     timerpool_submit(app->timers, interval_ms, type, (FuriEventLoopTimerCallback)callback, app);
-}
-
-void handle_command(SwireApp* app, FuriString* cmd) {
-    SwireUsb* usb = app->usb;
-
-    swire_usb_printf_line(usb, " > %s", cmd);
-    if(furi_string_equal(cmd, "swire_demo info") || furi_string_equal(cmd, "info")) {
-        swire_usb_printf_line(usb, "swire_demo info response start");
-        swire_usb_printf_line(usb, "version=v%s", APP_VERSION);
-        swire_usb_printf_line(usb, "bitrate=TODO");
-        swire_usb_printf_line(usb, "trigger_delay=TODO");
-        swire_usb_printf_line(usb, "end");
-        return;
-    }
-
-    if(furi_string_equal(cmd, "close")) {
-        swire_usb_printf_line(usb, "ok");
-        furi_event_loop_stop(app->event_loop);
-        return;
-    }
-
-    if(furi_string_equal(cmd, "send hex")) {
-        FuriStatus status = swire_usb_readline_str(usb, cmd);
-        if(status & FuriFlagError) {
-            global_debug()->err_loc = 31;
-            global_debug()->err = status;
-            return;
-        }
-        swire_usb_printf_line(usb, "send hex request received %d", furi_string_utf8_length(cmd));
-        return;
-    }
 }
 
 int tlsr_swire_demo_app(void* p) {

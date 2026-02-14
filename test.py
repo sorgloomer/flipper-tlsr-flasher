@@ -1,36 +1,38 @@
+from contextlib import closing
 from subprocess import check_call as run
 import serial
 import serial.tools.list_ports
 
 
-def main():
-    run("ufbt build")
-    run("ufbt launch")
-    cli = open_flipper()
-    try:
-        cli.write(b"log\r\n")
-        timeout = 0
-        while cli.is_open:
-            data = cli.readline()
-            if data is None:
-                break
-            if not data:
-                timeout += 1
-                if timeout >= 30:
-                    break
-            else:
-                timeout = 0
+def wait_for_line(cli, line):
+    while cli.is_open:
+        data = cli.readline()
+        if data is None:
+            raise Exception("data is none")
+        if not data:
+            timeout += 1
+            if timeout >= 5:
+                raise Exception("timeout")
+        else:
+            timeout = 0
             if data:
                 data = data.decode("utf-8").rstrip("\r\n")
-                print(data)
+                print(f" < {data}")
+                if data == line:
+                    break
                 if "NOT Initializing USB..." in data:
                     break
-    finally:
-        print(f"[i] Cleanup...")
-        if cli.is_open:
-            print(f"[i] Closing...")
-            cli.close()
-        print(f"[i] Closed")
+
+
+def main():
+    cli = open_flipper()
+    with closing(open_flipper()) as cli:
+        cli.write(b"ga7g4drb close\n")
+    run("ufbt launch")
+    with closing(open_flipper()) as cli:
+        wait_for_line("")
+        cli.write(b"bbt\n")
+        cli.write(b"ga7g4drb close\n")
 
 
 def open_flipper():

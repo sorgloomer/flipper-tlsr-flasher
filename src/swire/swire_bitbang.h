@@ -12,12 +12,14 @@ typedef enum {
     SwireBitbangErrorTimeout = 1,
 } SwireBitbangError;
 
+#define _TICKBUFFER_SIZE 20
 typedef struct {
     const GpioPin* pin_sws_i;
     const GpioPin* pin_sws_o;
     uint32_t next_unit_tick;
     uint32_t timeout_byte_ticks;
     SwireBitbangError error;
+    int32_t* tickbuffer;
 } SwireBitbang;
 
 static const uint32_t SwireBitbangGlobalTimeoutTicks = 64000;

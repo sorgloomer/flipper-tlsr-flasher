@@ -1,3 +1,4 @@
+#pragma once
 #include <furi.h>
 
 typedef struct TimerPool TimerPool;
