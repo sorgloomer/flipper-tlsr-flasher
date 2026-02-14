@@ -9,6 +9,8 @@
 #include <gui/modules/variable_item_list.h>
 #include <gui/modules/widget.h>
 
+#include <notification/notification_messages.h>
+
 #include "src/usb.h"
 #include "src/timerpool.h"
 #include "src/app/blinker.h"
@@ -20,7 +22,6 @@ typedef enum {
 typedef struct SwireApp {
     SwireUsb* usb;
     FuriEventLoop* event_loop;
-    // FuriMessageQueue* queue;
     bool running;
     uint32_t last_tick;
     TimerPool* timers;
@@ -31,11 +32,12 @@ typedef struct SwireApp {
     FuriString* command;
     FuriString* tmp_str1;
     FuriString* tmp_str2;
-    ViewPort* view_port;
 
     uint32_t debug_value;
     uint32_t debug_value_to_show;
 
+    Gui* gui;
+    NotificationApp* notifications;
     VariableItemList* var_item_list;
     ViewDispatcher* view_dispatcher;
     SceneManager* scene_manager;
@@ -57,7 +59,7 @@ typedef void (*SwireAppCallback)(SwireApp* app);
 void global_stop_loop();
 
 SwireApp* app_alloc();
-void app_init(SwireApp* self, ViewPort* view_port);
+void app_init(SwireApp* self);
 void app_deinit(SwireApp* self);
 void app_free(SwireApp* self);
 

@@ -3,6 +3,7 @@
 #include "src/app/app.h"
 #include "src/global_debug.h"
 #include "src/swire/swire_bitbang.h"
+#include "src/commands/commands_bitbang.h"
 
 void handle_command(SwireApp* app, FuriString* cmd) {
     SwireUsb* usb = app->usb;
@@ -35,8 +36,6 @@ void handle_command(SwireApp* app, FuriString* cmd) {
     }
 
     if(furi_string_equal(cmd, "bbt")) {
-        SwireBitbang* swire = swire_bitbang_alloc_with_sws(&gpio_ext_pa7, &gpio_ext_pa6);
-        swire_bitbang_byte_write(swire, 0x05);
-        swire_bitbang_free(swire);
+        cmd_bitbang_test_simple();
     }
 }
