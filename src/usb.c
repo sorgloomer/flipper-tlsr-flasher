@@ -1,6 +1,6 @@
 #include "src/usb.h"
-#include "src/rgb.h"
 #include "src/global_debug.h"
+#include "src/ringbuffer.h"
 
 #include "usb_cdc.h"
 
@@ -53,7 +53,8 @@ struct SwireUsb {
     OnRxLineDelegate on_rx_line;
     OnStateChangeDelegate on_state_change;
 
-    FuriString* string_rx;
+    RingBuffer ringbuffer_rx;
+    // FuriString* string_rx;
     FuriString* string_tx;
     bool auto_flush;
     volatile uint32_t debug_value;
@@ -66,7 +67,7 @@ struct SwireUsb {
     uint8_t* buffer_tx_building;
     uint8_t buffer_tx_1[USB_CDC_PKT_LEN];
     uint8_t buffer_tx_2[USB_CDC_PKT_LEN];
-    uint8_t buffer_rx[USB_CDC_PKT_LEN + 1];
+    // uint8_t buffer_rx[USB_CDC_PKT_LEN + 1];
 };
 
 typedef enum {
@@ -123,7 +124,8 @@ SwireUsb* swire_usb_alloc(FuriEventLoop* event_loop, uint32_t thread_flag_rx) {
     furi_event_flag_set(self->event_flag_tx, BlockingEventTxComplete);
     swire_usb_set_on_rx_line(self, NULL, NULL);
     swire_usb_set_on_state_change(self, NULL, NULL);
-    self->string_rx = furi_string_alloc();
+    ringbuffer_init(&self->ringbuffer_rx, 300);
+    // self->string_rx = furi_string_alloc();
     self->string_tx = furi_string_alloc();
     self->cli_vcp = furi_record_open(RECORD_CLI_VCP);
     self->buffer_tx_sending = self->buffer_tx_1;
@@ -147,7 +149,8 @@ void swire_usb_free(SwireUsb* self) {
     furi_event_flag_free(self->event_flag_tx);
     self->event_flag_tx = NULL;
     furi_record_close(RECORD_CLI_VCP);
-    furi_string_free(self->string_rx);
+    ringbuffer_deinit(&self->ringbuffer_rx);
+    // furi_string_free(self->string_rx);
     furi_string_free(self->string_tx);
     swire_usb_vcp_deinit2(self);
     free(self);
@@ -337,7 +340,9 @@ FuriStatus swire_usb_read(SwireUsb* self, uint8_t* buffer, uint32_t buffer_size)
 static FuriStatus
     swire_usb_rx_line_internal(SwireUsb* self, RxMode mode, FuriString* output_line) {
     self->debug_value = 0;
-    char* buffer_rx = (char*)self->buffer_rx;
+    // char* buffer_rx = (char*)self->buffer_rx;
+    RingBuffer* ring = &self->ringbuffer_rx;
+    Buffer buffer_rx;
     for(;;) {
         self->debug_value = 1;
         if(mode == RxModeBlock) {
@@ -351,25 +356,29 @@ static FuriStatus
             self->debug_value = 4;
         }
         self->debug_value = 5;
-        int32_t len = furi_hal_cdc_receive(self->vcp_ch, (uint8_t*)buffer_rx, USB_CDC_PKT_LEN);
-        self->debug_value = 6;
-        if(len <= 0) {
-            self->debug_value = 7;
-            return (mode == RxModeEvent && len == 0) ? FuriStatusOk : FuriStatusError;
+
+        if(ringbuffer_get_empty_space(ring) == 0) {
+            return FuriStatusError; // TODO
         }
-        buffer_rx[len] = 0;
+
+        ringbuffer_get_continuous_write_buffer(ring, &buffer_rx);
+        int32_t received = furi_hal_cdc_receive(self->vcp_ch, buffer_rx.ptr, buffer_rx.size);
+        ringbuffer_advance_write_tail(ring, received);
+
+        if(received <= 0) {
+            return (mode == RxModeEvent && received == 0) ? FuriStatusOk : FuriStatusError;
+        }
 
         self->debug_value = 8;
-        char* p_newline = strchr(buffer_rx, '\n');
+        uint8_t* p_newline = memchr(buffer_rx.ptr, '\n', received);
         if(p_newline == NULL) {
             self->debug_value = 9;
-            furi_string_cat_str(self->string_rx, buffer_rx);
             continue;
         }
         self->debug_value = 10;
 
-        char* p_endline = p_newline;
-        if(p_endline > buffer_rx && p_endline[-1] == '\r') {
+        uint8_t* p_endline = p_newline;
+        if(p_endline > buffer_rx.ptr && p_endline[-1] == '\r') {
             self->debug_value = 11;
             p_endline--;
         }
