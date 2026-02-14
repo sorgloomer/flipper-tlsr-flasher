@@ -53,7 +53,7 @@ void do_by_uart_dumploop(SwireUart* swire) {
     furi_string_free(string);
 }
 
-void do_by_uart() {
+void cmd_do_by_uart() {
     // SwireUart* swire = swire_uart_alloc(921600);
     SwireUart* swire = swire_uart_alloc(377804);
     swire->read_delay_per_byte_us = 35;

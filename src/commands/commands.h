@@ -1,6 +1,6 @@
 #pragma once
 
-#include "src/app.h"
+#include "src/app/app.h"
 #include "src/global_debug.h"
 #include "src/swire/swire_bitbang.h"
 
