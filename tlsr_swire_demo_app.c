@@ -65,6 +65,7 @@ void app_set_timer(
 
 uint32_t worker_callback(void* ctx);
 void handle_app_message(FuriEventLoopObject* object, void* ctx);
+void app_handle_rx_one(SwireApp* app);
 
 const GpioPin* const pin_sws = &gpio_ext_pa7;
 const GpioPin* const pin_back = &gpio_button_back;
@@ -476,16 +477,22 @@ static void handle_usb_event(FuriEventLoopObject* object, void* context) {
         app_handle_cdc_state_changed(app, app->usb, swire_usb_get_cdc_state(app->usb));
     }
     if(events & SwUsbRxEventRxAvailable) {
-        global_debug()->evt_rx++;
-        furi_event_flag_set(flag, SwUsbRxEventRxAvailable);
-        FuriStatus status = swire_usb_readline_str(app->usb, app->command);
-        furi_string_printf(app->message, "rls %08x", status);
-        if(status & FuriFlagError) {
-            global_debug()->err_loc = 31;
-            global_debug()->err = status;
-        } else {
-            handle_command(app, app->command);
-        }
+        app_handle_rx_one(app);
+    }
+}
+
+void app_handle_rx_one(SwireApp* app) {
+    FuriEventFlag* flag = swire_usb_get_event_flag_rx(app->usb);
+
+    global_debug()->evt_rx++;
+    furi_event_flag_set(flag, SwUsbRxEventRxAvailable);
+    FuriStatus status = swire_usb_readline_str(app->usb, app->command);
+    furi_string_printf(app->message, "rls %08x", status);
+    if(status & FuriFlagError) {
+        global_debug()->err_loc = 31;
+        global_debug()->err = status;
+    } else {
+        handle_command(app, app->command);
     }
 }
 
