@@ -9,16 +9,16 @@ _INLINE static uint32_t min_u32(uint32_t a, uint32_t b) {
 }
 
 void ringbuffer_init(struct RingBuffer* self, uint32_t capacity) {
-    self->capacity = capacity;
-    self->buffer = malloc(capacity);
-    furi_check(self->buffer);
+    self->buffer.size = capacity;
+    self->buffer.ptr = malloc(capacity);
+    furi_check(self->buffer.ptr);
     self->head = 0;
     self->tail = 0;
     self->size = 0;
 }
 
 void ringbuffer_deinit(RingBuffer* self) {
-    free(self->buffer);
+    free(self->buffer.ptr);
 }
 
 RingBuffer* ringbuffer_alloc(uint32_t capacity) {
@@ -38,20 +38,20 @@ void ringbuffer_free(RingBuffer* self) {
    WRITE (append at tail)
    ============================================================ */
 uint32_t ringbuffer_write(RingBuffer* self, uint8_t* buffer, uint32_t length) {
-    if(self->size == self->capacity) return 0;
+    if(self->size == self->buffer.size) return 0;
 
-    uint32_t writable = min_u32(length, self->capacity - self->size);
+    uint32_t writable = min_u32(length, self->buffer.size - self->size);
 
-    uint32_t first_part = min_u32(writable, self->capacity - self->tail);
+    uint32_t first_part = min_u32(writable, self->buffer.size - self->tail);
 
-    memcpy(self->buffer + self->tail, buffer, first_part);
+    memcpy(self->buffer.ptr + self->tail, buffer, first_part);
 
     uint32_t second_part = writable - first_part;
     if(second_part > 0) {
-        memcpy(self->buffer, buffer + first_part, second_part);
+        memcpy(self->buffer.ptr, buffer + first_part, second_part);
     }
 
-    self->tail = (self->tail + writable) % self->capacity;
+    self->tail = (self->tail + writable) % self->buffer.size;
     self->size += writable;
 
     return writable;
@@ -61,20 +61,20 @@ uint32_t ringbuffer_write(RingBuffer* self, uint8_t* buffer, uint32_t length) {
    WRITE AT START (prepend before head)
    ============================================================ */
 uint32_t ringbuffer_write_to_start(RingBuffer* self, uint8_t* buffer, uint32_t length) {
-    if(self->size == self->capacity) return 0;
+    if(self->size == self->buffer.size) return 0;
 
-    uint32_t writable = min_u32(length, self->capacity - self->size);
+    uint32_t writable = min_u32(length, self->buffer.size - self->size);
 
     /* new head position */
-    uint32_t new_head = (self->head + self->capacity - writable) % self->capacity;
+    uint32_t new_head = (self->head + self->buffer.size - writable) % self->buffer.size;
 
-    uint32_t first_part = min_u32(writable, self->capacity - new_head);
+    uint32_t first_part = min_u32(writable, self->buffer.size - new_head);
 
-    memcpy(self->buffer + new_head, buffer, first_part);
+    memcpy(self->buffer.ptr + new_head, buffer, first_part);
 
     uint32_t second_part = writable - first_part;
     if(second_part > 0) {
-        memcpy(self->buffer, buffer + first_part, second_part);
+        memcpy(self->buffer.ptr, buffer + first_part, second_part);
     }
 
     self->head = new_head;
@@ -91,16 +91,16 @@ uint32_t ringbuffer_read(RingBuffer* self, uint8_t* buffer, uint32_t length) {
 
     uint32_t readable = min_u32(length, self->size);
 
-    uint32_t first_part = min_u32(readable, self->capacity - self->head);
+    uint32_t first_part = min_u32(readable, self->buffer.size - self->head);
 
-    memcpy(buffer, self->buffer + self->head, first_part);
+    memcpy(buffer, self->buffer.ptr + self->head, first_part);
 
     uint32_t second_part = readable - first_part;
     if(second_part > 0) {
-        memcpy(buffer + first_part, self->buffer, second_part);
+        memcpy(buffer + first_part, self->buffer.ptr, second_part);
     }
 
-    self->head = (self->head + readable) % self->capacity;
+    self->head = (self->head + readable) % self->buffer.size;
     self->size -= readable;
 
     return readable;
@@ -114,15 +114,15 @@ uint32_t ringbuffer_read_from_end(RingBuffer* self, uint8_t* buffer, uint32_t le
 
     uint32_t readable = min_u32(length, self->size);
 
-    uint32_t start = (self->tail + self->capacity - readable) % self->capacity;
+    uint32_t start = (self->tail + self->buffer.size - readable) % self->buffer.size;
 
-    uint32_t first_part = min_u32(readable, self->capacity - start);
+    uint32_t first_part = min_u32(readable, self->buffer.size - start);
 
-    memcpy(buffer, self->buffer + start, first_part);
+    memcpy(buffer, self->buffer.ptr + start, first_part);
 
     uint32_t second_part = readable - first_part;
     if(second_part > 0) {
-        memcpy(buffer + first_part, self->buffer, second_part);
+        memcpy(buffer + first_part, self->buffer.ptr, second_part);
     }
 
     self->tail = start;
@@ -134,15 +134,15 @@ uint32_t ringbuffer_read_from_end(RingBuffer* self, uint8_t* buffer, uint32_t le
 /* ============================================================
    INFO FUNCTIONS
    ============================================================ */
-uint32_t ringbuffer_get_total_capacity(RingBuffer* self) {
-    return self->capacity;
+uint32_t ringbuffer_get_total_capacity(const RingBuffer* self) {
+    return self->buffer.size;
 }
 
-uint32_t ringbuffer_get_empty_space(RingBuffer* self) {
-    return self->capacity - self->size;
+uint32_t ringbuffer_get_empty_space(const RingBuffer* self) {
+    return self->buffer.size - self->size;
 }
 
-uint32_t ringbuffer_get_current_length(RingBuffer* self) {
+uint32_t ringbuffer_get_current_length(const RingBuffer* self) {
     return self->size;
 }
 
@@ -159,19 +159,19 @@ uint32_t ringbuffer_resize(RingBuffer* self, uint32_t new_capacity) {
     uint32_t to_copy = min_u32(self->size, new_capacity);
 
     /* copy data in logical order starting from head */
-    uint32_t first_part = min_u32(to_copy, self->capacity - self->head);
+    uint32_t first_part = min_u32(to_copy, self->buffer.size - self->head);
 
-    memcpy(new_buffer, self->buffer + self->head, first_part);
+    memcpy(new_buffer, self->buffer.ptr + self->head, first_part);
 
     uint32_t second_part = to_copy - first_part;
     if(second_part > 0) {
-        memcpy(new_buffer + first_part, self->buffer, second_part);
+        memcpy(new_buffer + first_part, self->buffer.ptr, second_part);
     }
 
-    free(self->buffer);
+    free(self->buffer.ptr);
 
-    self->buffer = new_buffer;
-    self->capacity = new_capacity;
+    self->buffer.ptr = new_buffer;
+    self->buffer.size = new_capacity;
     self->head = 0;
     self->size = to_copy;
     self->tail = to_copy % new_capacity;
@@ -179,28 +179,44 @@ uint32_t ringbuffer_resize(RingBuffer* self, uint32_t new_capacity) {
     return to_copy;
 }
 
-bool ringbuffer_get_continuous_write_buffer(RingBuffer* self, Buffer* output) {
-    if(self->size == self->capacity) return true;
-    uint32_t end_index = self->head > self->tail ? self->head : self->capacity;
-    output->size = end_index - self->tail;
-    output->ptr = self->buffer + self->tail;
-    return false;
+Buffer ringbuffer_get_continuous_write_buffer(const RingBuffer* self) {
+    if(self->size == self->buffer.size) {
+        return ({
+            Buffer result = {
+                .ptr = NULL,
+                .size = 0,
+            };
+            result;
+        });
+    }
+    uint32_t end_index = self->head > self->tail ? self->head : self->buffer.size;
+    return ({
+        Buffer result = {
+            .ptr = self->buffer.ptr + self->tail,
+            .size = end_index - self->tail,
+        };
+        result;
+    });
 }
 
-bool ringbuffer_get_continuous_write_buffer_head(RingBuffer* self, Buffer* output) {
-    if(self->size == self->capacity) return true;
+Buffer ringbuffer_get_continuous_write_buffer_head(const RingBuffer* self) {
+    Buffer output = {
+        .ptr = NULL,
+        .size = 0,
+    };
+    if(self->size == self->buffer.size) return output;
     uint32_t start_index = self->head > self->tail ? self->tail : 0;
-    output->size = self->head - start_index;
-    output->ptr = self->buffer + start_index;
-    return false;
+    output.size = self->head - start_index;
+    output.ptr = self->buffer.ptr + start_index;
+    return output;
 }
 
 void ringbuffer_advance_write_tail(RingBuffer* self, uint32_t amount) {
     self->size += amount;
-    self->tail = (self->tail + amount) % self->capacity;
+    self->tail = (self->tail + amount) % self->buffer.size;
 }
 
 void ringbuffer_advance_write_head(RingBuffer* self, uint32_t amount) {
     self->size += amount;
-    self->head = (self->head + self->capacity - amount) % self->capacity;
+    self->head = (self->head + self->buffer.size - amount) % self->buffer.size;
 }

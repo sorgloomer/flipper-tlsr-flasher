@@ -14,13 +14,20 @@ typedef struct SwireUsb SwireUsb;
 typedef void (*SwireUsbRxLineCallback)(void* context, SwireUsb* sender, FuriString* line);
 typedef void (*SwireUsbStateChangeCallback)(void* context, SwireUsb* sender, CdcState state);
 
-SwireUsb* swire_usb_alloc(FuriEventLoop* event_loop, uint32_t thread_flag);
+typedef enum {
+    SwUsbEventRxAvailable = (1 << 0),
+    SwUsbEventTxComplete = (1 << 1),
+    SwUsbEventStateChange = (1 << 2),
+    SwUsbEventAll = SwUsbEventRxAvailable | SwUsbEventStateChange | SwUsbEventTxComplete
+} SwUsbEvent;
+
+SwireUsb* swire_usb_alloc();
 void swire_usb_free(SwireUsb* self);
-void swire_usb_set_on_rx_line(SwireUsb* self, SwireUsbRxLineCallback callback, void* context);
-void swire_usb_set_on_state_change(
-    SwireUsb* self,
-    SwireUsbStateChangeCallback callback,
-    void* context);
+// void swire_usb_set_on_rx_line(SwireUsb* self, SwireUsbRxLineCallback callback, void* context);
+// void swire_usb_set_on_state_change(
+//     SwireUsb* self,
+//     SwireUsbStateChangeCallback callback,
+//     void* context);
 
 FuriStatus swire_usb_printf(SwireUsb* self, const char* format, ...);
 FuriStatus swire_usb_printf_line(SwireUsb* self, const char* format, ...);
@@ -38,3 +45,4 @@ FuriStatus swire_usb_readline_str(SwireUsb* self, FuriString* output);
 uint32_t swire_usb_get_debug_value(SwireUsb* self);
 CdcState swire_usb_get_cdc_state(SwireUsb* self);
 void swire_usb_pull_debug_data(SwireUsb* self);
+FuriEventFlag* swire_usb_get_event_flag(SwireUsb* self);

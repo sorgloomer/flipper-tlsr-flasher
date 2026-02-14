@@ -14,6 +14,7 @@ typedef struct Buffer {
 typedef struct RingBuffer {
     Buffer buffer;
     uint32_t head;
+    uint32_t tail;
     uint32_t size;
 } RingBuffer;
 
@@ -26,8 +27,8 @@ uint32_t ringbuffer_get_total_capacity(const RingBuffer* self);
 uint32_t ringbuffer_get_empty_space(const RingBuffer* self);
 uint32_t ringbuffer_get_current_length(const RingBuffer* self);
 
-bool ringbuffer_get_continuous_write_buffer(const RingBuffer* self, Buffer* output);
-bool ringbuffer_get_continuous_write_buffer_head(const RingBuffer* self, Buffer* output);
+Buffer ringbuffer_get_continuous_write_buffer(const RingBuffer* self);
+Buffer ringbuffer_get_continuous_write_buffer_head(const RingBuffer* self);
 void ringbuffer_advance_write_tail(RingBuffer* self, uint32_t amount);
 void ringbuffer_advance_write_head(RingBuffer* self, uint32_t amount);
 
