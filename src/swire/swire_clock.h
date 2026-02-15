@@ -2,6 +2,9 @@
 #include <furi.h>
 #include "swire_common.h"
 
+#define SWIRE_SYSTEM_CLOCK_FREQ    (SystemCoreClock)
+#define SWIRE_SYSTEM_CLOCK_CURRENT (DWT->CYCCNT)
+
 SWIRE_INLINE uint32_t swire_clock_ticks_per_second() {
     return SystemCoreClock;
 }

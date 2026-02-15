@@ -12,14 +12,18 @@ typedef enum {
     SwireBitbangErrorTimeout = 1,
 } SwireBitbangError;
 
-#define _TICKBUFFER_SIZE 20
+#define _WAVEFORM_BUFFER_LENGTH 30
 typedef struct {
     const GpioPin* pin_sws_i;
     const GpioPin* pin_sws_o;
+
+    uint32_t bitrate;
+    uint32_t clocks_per_second;
+
     uint32_t next_unit_tick;
     uint32_t timeout_byte_ticks;
     SwireBitbangError error;
-    int32_t* tickbuffer;
+    int32_t waveform_edges[_WAVEFORM_BUFFER_LENGTH];
 } SwireBitbang;
 
 static const uint32_t SwireBitbangGlobalTimeoutTicks = 64000;
@@ -30,6 +34,9 @@ void swire_bitbang_global_log_params();
 
 SwireBitbang* swire_bitbang_alloc_with_sws(const GpioPin* pin_sws_o, const GpioPin* pin_sws_i);
 void swire_bitbang_free(SwireBitbang* swire);
+
+uint32_t swire_bitbang_get_bitrage(SwireBitbang* swire);
+void swire_bitbang_set_bitrate(SwireBitbang* swire, uint32_t bitrate);
 
 void swire_bitbang_timer_restart(SwireBitbang* swire);
 void swire_bitbang_timer_continue(SwireBitbang* swire);

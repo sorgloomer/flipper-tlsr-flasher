@@ -44,30 +44,42 @@ SwireBitbang* swire_bitbang_alloc_with_sws(const GpioPin* pin_sws_i, const GpioP
     return swire;
 }
 
-void swire_bitbang_free(SwireBitbang* swire) {
-    if(swire == NULL) return;
-    free(swire->tickbuffer);
-    free(swire);
+void swire_bitbang_free(SwireBitbang* self) {
+    if(self == NULL) return;
+
+    furi_hal_gpio_init_simple(self->pin_sws_i, GpioModeAnalog);
+    furi_hal_gpio_init_simple(self->pin_sws_o, GpioModeAnalog);
+
+    free(self);
+}
+
+uint32_t swire_bitbang_get_bitrage(SwireBitbang* self) {
+    return self->bitrate;
+}
+void swire_bitbang_set_bitrate(SwireBitbang* self, uint32_t bitrate) {
+    self->bitrate = bitrate;
 }
 
 static void _swire_bitbang_init_with_sws(
-    SwireBitbang* swire,
+    SwireBitbang* self,
     const GpioPin* pin_sws_i,
     const GpioPin* pin_sws_o) {
-    swire->pin_sws_i = pin_sws_i;
-    swire->pin_sws_o = pin_sws_o;
+    self->pin_sws_i = pin_sws_i;
+    self->pin_sws_o = pin_sws_o;
 
-    swire->timeout_byte_ticks = _unit_ticks * 5 * 10 * 10;
-    swire->error = SwireBitbangErrorNone;
-    swire->tickbuffer = malloc(_TICKBUFFER_SIZE * sizeof(*swire->tickbuffer));
+    self->clocks_per_second = SWIRE_SYSTEM_CLOCK_FREQ;
+    self->bitrate = 960000;
 
-    furi_hal_gpio_write(swire->pin_sws_i, true);
-    furi_hal_gpio_init(swire->pin_sws_i, GpioModeInput, GpioPullUp, GpioSpeedVeryHigh);
+    self->timeout_byte_ticks = _unit_ticks * 5 * 10 * 10;
+    self->error = SwireBitbangErrorNone;
 
-    furi_hal_gpio_write(swire->pin_sws_o, true);
-    furi_hal_gpio_init(swire->pin_sws_o, GpioModeOutputOpenDrain, GpioPullUp, GpioSpeedVeryHigh);
+    furi_hal_gpio_write(self->pin_sws_i, true);
+    furi_hal_gpio_init(self->pin_sws_i, GpioModeInput, GpioPullUp, GpioSpeedVeryHigh);
 
-    swire_bitbang_timer_restart(swire);
+    furi_hal_gpio_write(self->pin_sws_o, true);
+    furi_hal_gpio_init(self->pin_sws_o, GpioModeOutputOpenDrain, GpioPullUp, GpioSpeedVeryHigh);
+
+    swire_bitbang_timer_restart(self);
 }
 
 void swire_bitbang_timer_restart(SwireBitbang* swire) {
@@ -106,41 +118,53 @@ void _swire_bitbang_write_bitsn(SwireBitbang* swire, uint32_t bits, int count) {
 
     swire->next_unit_tick = tick + _unit_ticks_backoff;
 }
-
-#define CLK (DWT->CYCCNT)
+#define _CLK ((int32_t)SWIRE_SYSTEM_CLOCK_CURRENT)
 
 void _swire_bitbang_write_bits9(SwireBitbang* self, uint32_t bits) {
     UNUSED(bits); // TODO
     const GpioPin* pin_sws_o = self->pin_sws_o;
+
+    FURI_LOG_T("swire", "_swire_bitbang_write_bits9 checkpoint 1");
+    swire_bitbang_timer_continue(self);
+    FURI_LOG_T("swire", "_swire_bitbang_write_bits9 checkpoint 2");
+
+    float bittime = ((float)self->clocks_per_second) / (float)self->bitrate;
+#define _BITCOUNT 10
+    furi_assert(_BITCOUNT * 2 < _WAVEFORM_BUFFER_LENGTH);
+    for(int i = 0; i < _BITCOUNT; i++) {
+        float bitstart = i * bittime;
+        bool bit = ((bits << 1 >> (9 - i)) & 1) != 0;
+        self->waveform_edges[2 * i + 0] = (int32_t)(bitstart);
+        self->waveform_edges[2 * i + 1] = (int32_t)(bitstart + bittime * (bit ? 0.8f : 0.2f));
+    }
+
+    FURI_LOG_T("swire", "_swire_bitbang_write_bits9 checkpoint 3");
+
+    int32_t* psample = self->waveform_edges;
+    int32_t sample;
+    int32_t* waveform_edges_end = self->waveform_edges + _BITCOUNT * 2;
     uint32_t pin_mask = pin_sws_o->pin;
     uint32_t pin_mask_i = ~pin_mask;
     volatile uint32_t* odr = &pin_sws_o->port->ODR;
-
-    swire_bitbang_timer_continue(self);
-
-    int32_t* sample = self->tickbuffer;
-    furi_check(20 <= _TICKBUFFER_SIZE);
-    for(int i = 0; i < 20; i++) {
-        sample[i] = i * 5;
-    }
-
-    int32_t* samples_end = self->tickbuffer + 20;
     __disable_irq();
-    int32_t clkstart = CLK + 10;
-    while(sample != samples_end) {
+    int32_t clkstart = _CLK + 10;
+    while(psample != waveform_edges_end) {
         // Important to balance the relation so that 0 is on one side to keep
         // integer overflows predictable
-        while((int32_t)CLK - (*sample) - clkstart > 0)
+        sample = *psample + clkstart;
+        while(_CLK - sample < 0)
             ;
         *odr &= pin_mask_i;
-        sample++;
-        while((int32_t)CLK - (*sample) - clkstart > 0)
+        psample++;
+        sample = *psample + clkstart;
+        while(_CLK - sample < 0)
             ;
         *odr |= pin_mask;
-        sample++;
+        psample++;
     }
     __enable_irq();
-    self->next_unit_tick = CLK + _unit_ticks_backoff;
+    FURI_LOG_T("swire", "_swire_bitbang_write_bits9 checkpoint 4");
+    self->next_unit_tick = _CLK + _unit_ticks_backoff;
 }
 
 void swire_bitbang_transaction_start(

@@ -1,9 +1,13 @@
 #include "src/commands/commands_bitbang.h"
+#include "src/utils/light_rgb.h"
 
-void cmd_bitbang_test_simple() {
+void cmd_bitbang_test_simple(SwireApp* app) {
+    light_rgb_set(0xffff00);
     SwireBitbang* swire = swire_bitbang_alloc_with_sws(&gpio_ext_pa7, &gpio_ext_pa6);
+    swire_bitbang_set_bitrate(swire, app->config->bitrate);
     swire_bitbang_byte_write(swire, 0x05);
     swire_bitbang_free(swire);
+    light_rgb_set(0x00ff00);
 }
 
 void cmd_bitbang_read() {

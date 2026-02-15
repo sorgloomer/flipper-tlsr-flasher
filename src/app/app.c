@@ -1,3 +1,4 @@
+#include "src/app/config.h"
 #include <gui/view_dispatcher.h>
 
 #include <power/power_service/power.h>
@@ -36,6 +37,8 @@ SwireApp* app_alloc() {
 
     self->running = true;
     self->usb = NULL;
+
+    self->config = swire_config_alloc();
 
     self->message = furi_string_alloc();
     self->message2 = furi_string_alloc();
@@ -92,6 +95,39 @@ SwireApp* app_alloc() {
     return self;
 }
 
+void app_free(SwireApp* self) {
+    if(self == NULL) return;
+    swire_usb_free(self->usb);
+
+    view_dispatcher_remove_view(self->view_dispatcher, SwireAppViewVarItemList);
+
+    dialog_ex_free(self->dialog);
+    furi_record_close(RECORD_NOTIFICATION);
+    widget_free(self->widget);
+    variable_item_list_free(self->var_item_list);
+    scene_manager_free(self->scene_manager);
+    furi_record_close(RECORD_GUI);
+    furi_record_close(RECORD_POWER);
+
+    blinker_free(self->blinker);
+    //if(self->timer_poll != NULL) furi_event_loop_timer_free(self->timer_poll);
+    //if(self->timer_debug != NULL) furi_event_loop_timer_free(self->timer_debug);
+    timerpool_free(self->timers);
+    view_dispatcher_free(self->view_dispatcher);
+    // furi_event_loop_free(self->event_loop); // owned and freed by view_dispatcher
+    furi_string_free(self->message);
+    furi_string_free(self->message2);
+    furi_string_free(self->tmp_str1);
+    furi_string_free(self->tmp_str2);
+    furi_string_free(self->command);
+    // furi_event_loop_unsubscribe(self->event_loop, self->queue);
+    // furi_message_queue_free(self->queue);
+
+    swire_config_free(self->config);
+
+    free(self);
+}
+
 static bool app_custom_event_callback(void* context, uint32_t event) {
     furi_assert(context);
     SwireApp* app = context;
@@ -128,37 +164,6 @@ void app_set_usb_enabled(SwireApp* self, bool value) {
             self->usb = NULL;
         }
     }
-}
-
-void app_free(SwireApp* self) {
-    if(self == NULL) return;
-    swire_usb_free(self->usb);
-
-    view_dispatcher_remove_view(self->view_dispatcher, SwireAppViewVarItemList);
-
-    dialog_ex_free(self->dialog);
-    furi_record_close(RECORD_NOTIFICATION);
-    widget_free(self->widget);
-    variable_item_list_free(self->var_item_list);
-    scene_manager_free(self->scene_manager);
-    furi_record_close(RECORD_GUI);
-    furi_record_close(RECORD_POWER);
-
-    blinker_free(self->blinker);
-    //if(self->timer_poll != NULL) furi_event_loop_timer_free(self->timer_poll);
-    //if(self->timer_debug != NULL) furi_event_loop_timer_free(self->timer_debug);
-    timerpool_free(self->timers);
-    view_dispatcher_free(self->view_dispatcher);
-    // furi_event_loop_free(self->event_loop); // owned and freed by view_dispatcher
-    furi_string_free(self->message);
-    furi_string_free(self->message2);
-    furi_string_free(self->tmp_str1);
-    furi_string_free(self->tmp_str2);
-    furi_string_free(self->command);
-    // furi_event_loop_unsubscribe(self->event_loop, self->queue);
-    // furi_message_queue_free(self->queue);
-
-    free(self);
 }
 
 void app_set_blinker(SwireApp* app, uint32_t color, uint32_t interval_ms) {
@@ -312,7 +317,7 @@ static void app_handle_rx_one(SwireApp* app) {
         global_debug()->err_loc = 31;
         global_debug()->err = status;
     } else {
-        handle_command(app, app->command);
+        handle_text_command(app, app->command);
     }
 }
 

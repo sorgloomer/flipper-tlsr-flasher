@@ -5,7 +5,7 @@
 #include "src/swire/swire_bitbang.h"
 #include "src/commands/commands_bitbang.h"
 
-void handle_command(SwireApp* app, FuriString* cmd) {
+void handle_text_command(SwireApp* app, FuriString* cmd) {
     SwireUsb* usb = app->usb;
 
     swire_usb_printf_line(usb, " > %s", cmd);
@@ -36,6 +36,6 @@ void handle_command(SwireApp* app, FuriString* cmd) {
     }
 
     if(furi_string_equal(cmd, "bbt")) {
-        cmd_bitbang_test_simple();
+        cmd_bitbang_test_simple(app);
     }
 }
