@@ -22,6 +22,8 @@ void cmd_pgm_init(SwireApp* app, const char* params) {
 
     swire_bitbang_free(app->swire);
     app->swire = cmd_swire_alloc(app);
+
+    swire_usb_writeline_cstr(app->usb, "ok");
 }
 
 void cmd_pgm_transaction_start(SwireApp* app, const char* params) {
@@ -109,7 +111,7 @@ FuriStatus cmd_pgm_bytes_write(SwireApp* app, const char* params) {
     return FuriStatusOk;
 }
 
-FuriStatus cmd_pgm_bytes_read(SwireApp* app, char* params) {
+FuriStatus cmd_pgm_bytes_read(SwireApp* app, const char* params) {
     FuriStatus status;
     const char* rest = strchr(params, ' ');
     if(rest == NULL) return FuriStatusErrorParameter;
@@ -179,6 +181,14 @@ bool cmd_pgm(SwireApp* app, FuriString* cmd) {
     }
     if(furi_string_equal(cmd, "tre")) {
         cmd_pgm_transaction_end(app);
+        return true;
+    }
+    if(furi_string_start_with(cmd, "bw ")) {
+        cmd_pgm_bytes_write(app, furi_string_get_cstr(cmd));
+        return true;
+    }
+    if(furi_string_start_with(cmd, "br ")) {
+        cmd_pgm_bytes_read(app, furi_string_get_cstr(cmd));
         return true;
     }
     if(furi_string_equal(cmd, "reset")) {

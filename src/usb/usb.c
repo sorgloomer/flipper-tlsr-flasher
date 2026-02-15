@@ -337,6 +337,20 @@ FuriStatus swire_usb_write_flush(SwireUsb* self) {
     return STATUS_DROP_VALUE(status);
 }
 
+FuriStatus swire_usb_read(SwireUsb* self, uint8_t* buffer, uint32_t buffer_size) {
+    if((int32_t)buffer_size < 0) {
+        return FuriStatusErrorParameter;
+    }
+    int32_t received = swire_usb_read_internal(self, buffer, buffer_size, -1);
+    if(received & FuriFlagError) {
+        return received;
+    }
+    if(received != (int32_t)buffer_size) {
+        return FuriStatusError;
+    }
+    return FuriStatusOk;
+}
+
 FuriStatus swire_usb_readline_str(SwireUsb* self, FuriString* output) {
     int32_t received = swire_usb_read_internal(self, self->line_buffer, SW_LINE_BUFFER_SIZE, '\n');
     if(received & FuriFlagError) {
