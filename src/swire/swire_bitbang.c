@@ -131,15 +131,15 @@ void _swire_bitbang_write_bits9(SwireBitbang* self, uint32_t bits) {
     }
 
     int32_t* sample = self->waveform_edges;
-    uint32_t pin_action1 = pin_sws_o->pin;
-    uint32_t pin_action0 = pin_action1 << GPIO_NUMBER;
+    uint32_t pin_set1 = pin_sws_o->pin;
+    uint32_t pin_set0 = pin_sws_o->pin << GPIO_NUMBER;
     volatile uint32_t* bsrr = &pin_sws_o->port->BSRR;
 
 #define _ONEBIT(idx)                                                 \
     swire_clock_spinwait_until_tick(sample[idx * 2 + 0] + clkstart); \
-    *bsrr = pin_action0;                                             \
+    *bsrr = pin_set0;                                                \
     swire_clock_spinwait_until_tick(sample[idx * 2 + 1] + clkstart); \
-    *bsrr = pin_action1;
+    *bsrr = pin_set1;
 
     __disable_irq();
     LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_OUTPUT);
@@ -229,8 +229,8 @@ int32_t swire_bitbang_byte_read(SwireBitbang* self) {
     volatile uint32_t* pino_bsrr = &pin_sws_o->port->BSRR;
     volatile uint32_t* idr = &pin_sws_i->port->IDR;
     uint32_t pini_mask1 = pin_sws_i->pin;
-    uint32_t pino_action1 = pin_sws_o->pin;
-    uint32_t pino_action0 = pin_sws_o->pin << GPIO_NUMBER;
+    uint32_t pino_set1 = pin_sws_o->pin;
+    uint32_t pino_set0 = pin_sws_o->pin << GPIO_NUMBER;
     uint32_t buffer = 0;
     int32_t samples[2] = {0, (int32_t)bittimecyc * 0.2};
     uint32_t ticks[18];
@@ -239,9 +239,9 @@ int32_t swire_bitbang_byte_read(SwireBitbang* self) {
     LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_OUTPUT);
     int32_t clkstart = swire_clock_get_real_tick() + 6;
     swire_clock_spinwait_until_tick(samples[0] + clkstart);
-    *pino_bsrr = pino_action0;
+    *pino_bsrr = pino_set0;
     swire_clock_spinwait_until_tick(samples[1] + clkstart);
-    *pino_bsrr = pino_action1;
+    *pino_bsrr = pino_set1;
     LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_INPUT);
 
     _SWIRE_WAIT_BIT(ticks[0], ticks[1]);
