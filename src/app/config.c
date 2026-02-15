@@ -1,9 +1,10 @@
 #include "src/app/config.h"
+#include "src/app/bitrate_options.h"
 
 SwireConfig* swire_config_alloc() {
     SwireConfig* self = malloc(sizeof(SwireConfig));
     furi_check(self);
-    self->bitrate = 480000;
+    self->bitrate = BitrateOptions__default;
     return self;
 }
 

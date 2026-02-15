@@ -6,16 +6,14 @@
 #include "swire_clock.h"
 #include "./swire_bitbang.h"
 
+#define _ENOUGH_CYCLES_TO_TRANSLATE_SAMPLE_BUFFER_OF_20 320
+#define _PRECALCULATE_SAMPLE_TRANSLATE                  1
+
 uint32_t _unit_ticks;
 uint32_t _unit_ticks_backoff;
 
 static void _swire_bitbang_init_with_sws(SwireBitbang* swire, IoPins sws);
 
-SWIRE_INLINE static bool _swire_bitbang_spinwait_until_pin_or_timeout(
-    SwireBitbang* swire,
-    const GpioPin* pin,
-    bool value,
-    uint32_t timeout_tick);
 void _swire_init_with_sws(SwireBitbang* swire, const GpioPin* pin_sws_o, const GpioPin* pin_sws_i);
 
 void swire_bitbang_global_init() {
@@ -78,47 +76,17 @@ static void _swire_bitbang_init_with_sws(SwireBitbang* self, const IoPins sws) {
 }
 
 void swire_bitbang_timer_restart(SwireBitbang* swire) {
-    swire->next_unit_tick = swire_clock_get_real_tick();
+    swire->next_unit_tick = swire_clock_get_cycclk();
 }
 
-void swire_bitbang_timer_continue(SwireBitbang* swire) {
-    uint32_t next_unit_tick = swire->next_unit_tick;
+void swire_bitbang_timer_continue(SwireBitbang* self) {
+    uint32_t next_unit_tick = self->next_unit_tick;
     swire_clock_spinwait_until_tick(next_unit_tick);
-    swire->next_unit_tick = swire_clock_get_real_tick();
+    self->next_unit_tick = swire_clock_get_cycclk();
 }
-
-void _swire_bitbang_write_bitsn(SwireBitbang* swire, uint32_t bits, int count) {
-    const GpioPin* pin_sws_o = swire->pin_sws_o;
-    swire_bitbang_timer_continue(swire);
-
-    bits <<= 32 - count;
-    uint32_t unit_1 = _unit_ticks;
-    uint32_t unit_4 = _unit_ticks * 4;
-    uint32_t unit_sw = unit_1 ^ unit_4;
-    __disable_irq();
-
-    furi_hal_gpio_write(pin_sws_o, false);
-    uint32_t tick = swire_clock_get_real_tick();
-    while(count > 0) {
-        uint32_t bit = bits >> 31;
-        bits <<= 1;
-        SWIRE_CLOCK_PROGRESS_TICKS(tick, unit_1 ^ (bit * unit_sw));
-        furi_hal_gpio_write(pin_sws_o, true);
-        --count;
-        SWIRE_CLOCK_PROGRESS_TICKS(tick, unit_4 ^ (bit * unit_sw));
-        furi_hal_gpio_write(pin_sws_o, false);
-    }
-    SWIRE_CLOCK_PROGRESS_TICKS(tick, _unit_ticks);
-    __enable_irq();
-
-    swire->next_unit_tick = tick + _unit_ticks_backoff;
-}
-#define _CLK ((int32_t)SWIRE_SYSTEM_CLOCK_CURRENT)
 
 void _swire_bitbang_write_bits9(SwireBitbang* self, uint32_t bits) {
     const GpioPin* pin_sws_o = self->pin_sws_o;
-
-    swire_bitbang_timer_continue(self);
 
     float bittimecyc = ((float)self->clocks_per_second) / (float)self->bitrate;
 #define _BITCOUNT 10
@@ -135,15 +103,37 @@ void _swire_bitbang_write_bits9(SwireBitbang* self, uint32_t bits) {
     uint32_t pin_set0 = pin_sws_o->pin << GPIO_NUMBER;
     volatile uint32_t* bsrr = &pin_sws_o->port->BSRR;
 
-#define _ONEBIT(idx)                                                 \
-    swire_clock_spinwait_until_tick(sample[idx * 2 + 0] + clkstart); \
-    *bsrr = pin_set0;                                                \
-    swire_clock_spinwait_until_tick(sample[idx * 2 + 1] + clkstart); \
+#if _PRECALCULATE_SAMPLE_TRANSLATE == 1
+#define _ONEBIT(idx)                                      \
+    swire_clock_spinwait_until_tick(sample[idx * 2 + 0]); \
+    *bsrr = pin_set0;                                     \
+    swire_clock_spinwait_until_tick(sample[idx * 2 + 1]); \
     *bsrr = pin_set1;
+#else
+#define _ONEBIT(idx)                                                   \
+    swire_clock_spinwait_until_tick(clk_offset + sample[idx * 2 + 0]); \
+    *bsrr = pin_set0;                                                  \
+    swire_clock_spinwait_until_tick(clk_offset + sample[idx * 2 + 1]); \
+    *bsrr = pin_set1;
+#endif
+    swire_bitbang_timer_continue(self);
 
     __disable_irq();
+
+#if _PRECALCULATE_SAMPLE_TRANSLATE == 1
+    {
+        int32_t clk_translate = cyc_max_i32(
+            self->next_unit_tick,
+            swire_clock_get_cycclk() + _ENOUGH_CYCLES_TO_TRANSLATE_SAMPLE_BUFFER_OF_20);
+        for(int i = 0; i < 20; i++)
+            sample[i] += clk_translate;
+    }
+#endif
+
     LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_OUTPUT);
-    int32_t clkstart = swire_clock_get_real_tick() + 6;
+#if _PRECALCULATE_SAMPLE_TRANSLATE != 1
+    int32_t clk_offset = swire_clock_get_cycclk() + 6;
+#endif
     _ONEBIT(0);
     _ONEBIT(1);
     _ONEBIT(2);
@@ -157,7 +147,11 @@ void _swire_bitbang_write_bits9(SwireBitbang* self, uint32_t bits) {
     LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_INPUT);
     __enable_irq();
 
-    self->next_unit_tick = _CLK + (int32_t)(1 * bittimecyc);
+#if _PRECALCULATE_SAMPLE_TRANSLATE == 1
+    self->next_unit_tick = sample[18] + (int32_t)(2 * bittimecyc);
+#else
+    self->next_unit_tick = sample[18] + clk_offset + (int32_t)(2 * bittimecyc);
+#endif
 }
 
 void swire_bitbang_transaction_start(
@@ -189,30 +183,14 @@ void swire_bitbang_byte_write(SwireBitbang* swire, uint8_t data) {
     _swire_bitbang_write_bits9(swire, data);
 }
 
-SWIRE_INLINE static bool _swire_bitbang_spinwait_until_pin_or_timeout(
-    SwireBitbang* swire,
-    const GpioPin* pin,
-    bool value,
-    uint32_t timeout_tick) {
-    for(;;) {
-        if(furi_hal_gpio_read(pin) == value) {
-            return false;
-        }
-        if(swire_clock_tick_elapsed(timeout_tick)) {
-            swire->error = SwireBitbangErrorTimeout;
-            return true;
-        }
-    }
-}
-
 #define _SWIRE_WAIT_BIT(tick0, tick1)                                    \
     for(;;) {                                                            \
-        (tick0) = swire_clock_get_real_tick();                           \
+        (tick0) = swire_clock_get_cycclk();                              \
         if((*idr & pini_mask1) == 0) break;                              \
         if(((int32_t)((tick0) - timeout)) > 0) goto halt_abrupt_timeout; \
     }                                                                    \
     for(;;) {                                                            \
-        (tick1) = swire_clock_get_real_tick();                           \
+        (tick1) = swire_clock_get_cycclk();                              \
         if((*idr & pini_mask1) != 0) break;                              \
         if(((int32_t)((tick1) - timeout)) > 0) goto halt_abrupt_timeout; \
     }
@@ -221,8 +199,7 @@ int32_t swire_bitbang_byte_read(SwireBitbang* self) {
     if(swire_bitbang_has_error(self)) return -1;
     const GpioPin* pin_sws_o = self->pin_sws_o;
     const GpioPin* pin_sws_i = self->pin_sws_i;
-    swire_bitbang_timer_continue(self);
-    uint32_t tickss = swire_clock_get_real_tick();
+    uint32_t tickss = swire_clock_get_cycclk();
     uint32_t timeout = tickss + self->timeout_byte_ticks;
     float bittimecyc = ((float)self->clocks_per_second) / (float)self->bitrate;
 
@@ -235,9 +212,10 @@ int32_t swire_bitbang_byte_read(SwireBitbang* self) {
     int32_t samples[2] = {0, (int32_t)bittimecyc * 0.2};
     uint32_t ticks[18];
 
+    swire_bitbang_timer_continue(self);
     __disable_irq();
     LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_OUTPUT);
-    int32_t clkstart = swire_clock_get_real_tick() + 6;
+    int32_t clkstart = swire_clock_get_cycclk() + 6;
     swire_clock_spinwait_until_tick(samples[0] + clkstart);
     *pino_bsrr = pino_set0;
     swire_clock_spinwait_until_tick(samples[1] + clkstart);
@@ -255,16 +233,15 @@ int32_t swire_bitbang_byte_read(SwireBitbang* self) {
     _SWIRE_WAIT_BIT(ticks[16], ticks[17]);
     __enable_irq();
 
-    self->next_unit_tick = ticks[17] + (int32_t)(2 * bittimecyc);
-
     for(int i = 0; i < 8; i++) {
         int32_t len0 = ticks[2 * i + 2] - ticks[2 * i + 1];
         int32_t len1 = ticks[2 * i + 1] - ticks[2 * i + 0];
         uint32_t bit = 1 << (7 - i);
         buffer |= (len0 < len1) ? bit : 0;
     }
+    self->next_unit_tick = ticks[17] + (int32_t)(1.8f * bittimecyc);
 
-    swire_clock_spinwait_until_tick(self->next_unit_tick);
+    // swire_clock_spinwait_until_tick(self->next_unit_tick);
 
     // FURI_LOG_I("swire", "CHECKPOINT read %lx", buffer);
     return buffer;

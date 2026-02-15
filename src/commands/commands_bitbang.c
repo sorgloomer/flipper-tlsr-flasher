@@ -1,4 +1,5 @@
 #include "src/commands/commands_bitbang.h"
+#include "src/swire/swire_clock.h"
 #include "src/utils/light_rgb.h"
 
 void cmd_bitbang_test_simple(SwireApp* app) {
@@ -8,6 +9,16 @@ void cmd_bitbang_test_simple(SwireApp* app) {
         .in = &gpio_ext_pa6,
     });
     swire_bitbang_set_bitrate(swire, app->config->bitrate);
+
+    const GpioPin* signal = &gpio_ext_pc3;
+    furi_hal_gpio_init_simple(signal, GpioModeOutputPushPull);
+    int32_t basecyc = swire_clock_get_cycclk();
+    swire_clock_spinwait_until_tick(basecyc + 100);
+    furi_hal_gpio_write(signal, false);
+    swire_clock_spinwait_until_tick(basecyc + 200);
+    furi_hal_gpio_write(signal, true);
+    furi_hal_gpio_init_simple(signal, GpioModeAnalog);
+
     swire_bitbang_transaction_start(swire, 0x0602, SwireBitbangRwWrite, 0);
     swire_bitbang_byte_write(swire, 0x05);
     swire_bitbang_transaction_end(swire);

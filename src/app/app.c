@@ -43,7 +43,7 @@ SwireApp* app_alloc() {
     self->tmp_str1 = furi_string_alloc();
     self->tmp_str2 = furi_string_alloc();
     self->command = furi_string_alloc();
-    self->last_tick = swire_clock_get_real_tick();
+    self->last_tick = swire_clock_get_cycclk();
     self->view_dispatcher = view_dispatcher_alloc();
     self->event_loop = view_dispatcher_get_event_loop(self->view_dispatcher);
     self->timers = timerpool_alloc(self->event_loop);

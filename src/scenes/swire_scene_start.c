@@ -8,29 +8,10 @@
 #include "src/scenes/swire_scene_start.h"
 #include "src/scenes/swire_gui_event.h"
 #include "src/app/app.h"
-#include "src/utils/light_rgb.h"
+#include "src/app/bitrate_options.h"
 #include "src/commands/commands_bitbang.h"
 
 #define _BITRATE_STR_BUFFER_SIZE 16
-
-const uint32_t bitrates[] = {
-    4,
-    60,
-    1200,
-    24000,
-    30000,
-    48000,
-    60000,
-    96000,
-    120000,
-    180000,
-    240000,
-    360000,
-    480000,
-    720000,
-    960000,
-};
-const uint32_t bitrates__count = sizeof(bitrates) / sizeof(bitrates[0]);
 
 enum SwireUsbEnabled {
     SwireUsbEnabledOff,
@@ -79,14 +60,14 @@ static void bitrate_change_callback(VariableItem* item) {
     SwireApp* app = variable_item_get_context(item);
     uint8_t index = variable_item_get_current_value_index(item);
     bitrate_update_text(item);
-    app->config->bitrate = bitrates[index];
+    app->config->bitrate = BitrateOptions__values[index];
 }
 
 static void bitrate_update_text(VariableItem* item) {
     int index = variable_item_get_current_value_index(item);
-    furi_assert(index < (int)bitrates__count);
+    furi_assert(index < (int)BitrateOptions__count);
     char bitratebuffer[_BITRATE_STR_BUFFER_SIZE];
-    snprintf(bitratebuffer, _BITRATE_STR_BUFFER_SIZE, "%ld", bitrates[index]);
+    snprintf(bitratebuffer, _BITRATE_STR_BUFFER_SIZE, "%ld", BitrateOptions__values[index]);
     variable_item_set_current_value_text(item, bitratebuffer);
 }
 
@@ -109,7 +90,7 @@ void swire_scene_start_on_enter(void* context) {
             break;
         case SwireStartItemBitrate: {
             VariableItem* item = variable_item_list_add(
-                var_item_list, "bitrate", bitrates__count, bitrate_change_callback, app);
+                var_item_list, "bitrate", BitrateOptions__count, bitrate_change_callback, app);
             int32_t index = bitrate_find_index(app->config->bitrate, 9);
             variable_item_set_current_value_index(item, index);
             bitrate_update_text(item);
@@ -168,9 +149,9 @@ void swire_scene_start_on_exit(void* context) {
 }
 
 static int32_t bitrate_find_index(uint32_t value, int32_t default_index) {
-    furi_assert(default_index < (int32_t)bitrates__count, "bitrate_find_index");
-    for(int32_t i = 0; i < (int32_t)bitrates__count; i++) {
-        if(bitrates[i] == value) {
+    furi_assert(default_index < (int32_t)BitrateOptions__count, "bitrate_find_index");
+    for(int32_t i = 0; i < (int32_t)BitrateOptions__count; i++) {
+        if(BitrateOptions__values[i] == value) {
             return i;
         }
     }
