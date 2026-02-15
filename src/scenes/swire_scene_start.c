@@ -32,6 +32,9 @@ static void scene_start_var_list_enter_callback(void* context, uint32_t index) {
     furi_assert(context);
     SwireApp* app = context;
     switch(index) {
+    case SwireStartItemBitbangRead:
+        view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEventBitbangRead);
+        break;
     case SwireStartItemBitbangTest:
         view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEventBitbangTest);
         break;
@@ -79,6 +82,9 @@ void swire_scene_start_on_enter(void* context) {
 
     for(int i = 0; i < SwireStartItem__count; i++) {
         switch(i) {
+        case SwireStartItemBitbangRead:
+            variable_item_list_add(var_item_list, "BitBang Read", 0, NULL, NULL);
+            break;
         case SwireStartItemBitbangTest:
             variable_item_list_add(var_item_list, "BitBang Test", 0, NULL, NULL);
             break;
@@ -110,6 +116,9 @@ void swire_scene_start_on_enter(void* context) {
                     item, swire_usb_enabled_text[SwireUsbEnabledOff]);
             }
         } break;
+        default:
+            furi_crash("VariItem unin");
+            break;
         }
     }
     variable_item_list_set_selected_item(
@@ -125,6 +134,9 @@ bool swire_scene_start_on_event(void* context, SceneManagerEvent event) {
         return false;
     }
     switch(event.event) {
+    case SwireGuiEventBitbangRead:
+        cmd_bitbang_read(app);
+        break;
     case SwireGuiEventBitbangTest:
         cmd_bitbang_test_simple(app);
         break;

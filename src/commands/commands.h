@@ -4,6 +4,7 @@
 #include "src/utils/global_debug.h"
 #include "src/swire/swire_bitbang.h"
 #include "src/commands/commands_bitbang.h"
+#include "src/commands/commands_pgm.h"
 
 void handle_text_command(SwireApp* app, FuriString* cmd) {
     SwireUsb* usb = app->usb;
@@ -32,6 +33,10 @@ void handle_text_command(SwireApp* app, FuriString* cmd) {
             return;
         }
         swire_usb_printf_line(usb, "send hex request received %d", furi_string_utf8_length(cmd));
+        return;
+    }
+
+    if(cmd_pgm(app, cmd)) {
         return;
     }
 

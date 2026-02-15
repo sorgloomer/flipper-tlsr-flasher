@@ -16,6 +16,7 @@
 #include "src/utils/timerpool.h"
 #include "src/app/blinker.h"
 #include "src/app/config.h"
+#include "src/swire/swire_bitbang.h"
 
 typedef enum {
     SwireAppViewVarItemList,
@@ -23,6 +24,8 @@ typedef enum {
 
 typedef struct SwireApp {
     SwireUsb* usb;
+    SwireBitbang* swire;
+
     SwireConfig* config;
     FuriEventLoop* event_loop;
     bool running;

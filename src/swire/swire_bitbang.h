@@ -40,7 +40,7 @@ uint32_t swire_bitbang_get_bitrage(SwireBitbang* swire);
 void swire_bitbang_set_bitrate(SwireBitbang* swire, uint32_t bitrate);
 
 void swire_bitbang_timer_restart(SwireBitbang* swire);
-void swire_bitbang_timer_continue(SwireBitbang* swire);
+void swire_bitbang_timer_join(SwireBitbang* swire);
 bool swire_bitbang_has_error(SwireBitbang* swire);
 
 void swire_bitbang_transaction_start(

@@ -35,6 +35,7 @@ SwireApp* app_alloc() {
 
     self->running = true;
     self->usb = NULL;
+    self->swire = NULL;
 
     self->config = swire_config_alloc();
 
@@ -96,6 +97,7 @@ SwireApp* app_alloc() {
 void app_free(SwireApp* self) {
     if(self == NULL) return;
     swire_usb_free(self->usb);
+    swire_bitbang_free(self->swire);
 
     view_dispatcher_remove_view(self->view_dispatcher, SwireAppViewVarItemList);
 

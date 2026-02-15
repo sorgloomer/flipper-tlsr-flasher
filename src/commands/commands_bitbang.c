@@ -10,14 +10,14 @@ void cmd_bitbang_test_simple(SwireApp* app) {
     });
     swire_bitbang_set_bitrate(swire, app->config->bitrate);
 
-    const GpioPin* signal = &gpio_ext_pc3;
-    furi_hal_gpio_init_simple(signal, GpioModeOutputPushPull);
+    const GpioPin* trigger = &gpio_ext_pc3;
+    furi_hal_gpio_init_simple(trigger, GpioModeOutputPushPull);
     int32_t basecyc = swire_clock_get_cycclk();
     swire_clock_spinwait_until_tick(basecyc + 100);
-    furi_hal_gpio_write(signal, false);
+    furi_hal_gpio_write(trigger, false);
     swire_clock_spinwait_until_tick(basecyc + 200);
-    furi_hal_gpio_write(signal, true);
-    furi_hal_gpio_init_simple(signal, GpioModeAnalog);
+    furi_hal_gpio_write(trigger, true);
+    furi_hal_gpio_init_simple(trigger, GpioModeAnalog);
 
     swire_bitbang_transaction_start(swire, 0x0602, SwireBitbangRwWrite, 0);
     swire_bitbang_byte_write(swire, 0x05);
@@ -29,13 +29,28 @@ void cmd_bitbang_test_simple(SwireApp* app) {
     light_rgb_set(0x00ff00);
 }
 
-void cmd_bitbang_read() {
+void cmd_bitbang_read(SwireApp* app) {
     int32_t row[16];
 
-    SwireBitbang* swire = swire_bitbang_alloc_with_sws((IoPins){
-        .out = &gpio_ext_pa7,
-        .in = &gpio_ext_pa6,
-    });
+    const GpioPin* pin_power = &gpio_ext_pb2;
+    const GpioPin* pin_trigger = &gpio_ext_pc3;
+    const GpioPin* pin_sws = &gpio_ext_pa7;
+
+    SwireBitbang* swire = swire_bitbang_alloc_with_sws((IoPins){.out = pin_sws, .in = pin_sws});
+    swire_bitbang_set_bitrate(swire, app->config->bitrate);
+
+    furi_hal_gpio_init_simple(pin_power, GpioModeOutputPushPull);
+    furi_hal_gpio_write(pin_power, false);
+    furi_delay_ms(app->config->reset_duration_ms);
+    furi_hal_gpio_write(pin_power, true);
+    furi_delay_ms(app->config->reset_delay_ms);
+
+    furi_hal_gpio_init_simple(pin_trigger, GpioModeOutputPushPull);
+    furi_hal_gpio_write(pin_trigger, false);
+    furi_delay_us(app->config->trigger_duration_us);
+    furi_hal_gpio_write(pin_trigger, true);
+    furi_delay_us(app->config->trigger_delay_us);
+    furi_hal_gpio_init_simple(pin_trigger, GpioModeAnalog);
 
     swire_bitbang_transaction_start(swire, 0x0602, SwireBitbangRwWrite, 0);
     swire_bitbang_byte_write(swire, 0x05);
@@ -111,13 +126,17 @@ void cmd_bitbang_read() {
 
 exit:
     swire_bitbang_transaction_end_force(swire);
+
+    furi_hal_gpio_init_simple(pin_power, GpioModeAnalog);
+
+    furi_delay_ms(app->config->keep_powered_duration_ms);
     swire_bitbang_free(swire);
 }
 
-void cmd_bitbang_read_top(uint32_t bitrate) {
+void cmd_bitbang_read_top(SwireApp* app, uint32_t bitrate) {
     swire_bitbang_global_init_with_bitrate(bitrate);
     swire_bitbang_global_log_params();
-    cmd_bitbang_read();
+    cmd_bitbang_read(app);
     furi_delay_ms(500);
 }
 
@@ -144,3 +163,44 @@ void cmd_bitbang_test_switching_freq(SwireApp* app) {
 
     furi_hal_gpio_init_simple(pin, GpioModeAnalog);
 }
+
+/*
+void cmd_dump_by_bitbang() {
+    // SwireUart* swire = swire_uart_alloc(921600);
+    SwireBitbang* swire = swire_bitbang_alloc_with_sws(377804);
+    swire->read_delay_per_byte_us = 35;
+    uint8_t cmd[2];
+
+    swire_uart_write1(swire, 0x0602, 0, 0x05); // CPU Stop
+    swire_uart_write1(swire, 0x00b2, 0, 0x7f); // b0-b4 SWIRE
+    int32_t sanity_check = swire_uart_read1(swire, 0x00b2, 0); // b0-b4 SWIRE
+    FURI_LOG_W("swire", "Sanity test...");
+    if(sanity_check != 0x7f) {
+        FURI_LOG_W("swire", "Sanity test failed %02ld", sanity_check);
+    }
+    // MSPI = Memory SPI
+    // CS = Chip Select
+    swire_uart_write1(swire, 0x000d, 0, 0x00); // MSPI Control, CS bit active low
+
+    // addr = Address
+    swire_uart_write1(swire, 0x000c, 0, 0x03); // MSPI Data, 03 = read
+    swire_uart_write1(swire, 0x000c, 0, 0x00); // MSPI read addr[2]
+    swire_uart_write1(swire, 0x000c, 0, 0x00); // MSPI read addr[1]
+    swire_uart_write1(swire, 0x000c, 0, 0x00); // MSPI read addr[0]
+
+    cmd[0] = 0x00; // MSPI Data, 00 to drive MSPI Clock to initiate first read
+    cmd[1] = 0x0a; // MSPI Control, auto read mode
+    swire_uart_write(swire, 0x000c, 0, cmd, 2);
+
+    swire_uart_write1(
+        swire, 0x00b3, 0, 0x80); // swire mode, fifo, repeated reads from same address
+
+    do_by_uart_dumploop(swire);
+
+    swire_uart_write1(swire, 0x00b3, 0, 0x00); // swire mode reset to default
+    swire_uart_write1(swire, 0x000d, 0, 0x01); // MSPI Control disable CS
+
+    furi_delay_ms(500);
+    SWIRE_UART_FREE(swire);
+}
+*/

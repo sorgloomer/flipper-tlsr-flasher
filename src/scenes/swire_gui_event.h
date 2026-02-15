@@ -1,7 +1,8 @@
 #pragma once
 
 typedef enum {
-    SwireGuiEventBitbangTest = 1,
+    SwireGuiEventBitbangRead = 1,
+    SwireGuiEventBitbangTest,
     SwireGuiEventFreqTest,
     SwireGuiEventErrorBack,
     SwireGuiEventUsbEnabledOn,

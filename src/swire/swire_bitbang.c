@@ -79,7 +79,7 @@ void swire_bitbang_timer_restart(SwireBitbang* swire) {
     swire->next_unit_tick = swire_clock_get_cycclk();
 }
 
-void swire_bitbang_timer_continue(SwireBitbang* self) {
+void swire_bitbang_timer_join(SwireBitbang* self) {
     uint32_t next_unit_tick = self->next_unit_tick;
     swire_clock_spinwait_until_tick(next_unit_tick);
     self->next_unit_tick = swire_clock_get_cycclk();
@@ -116,7 +116,7 @@ void _swire_bitbang_write_bits9(SwireBitbang* self, uint32_t bits) {
     swire_clock_spinwait_until_tick(clk_offset + sample[idx * 2 + 1]); \
     *bsrr = pin_set1;
 #endif
-    swire_bitbang_timer_continue(self);
+    swire_bitbang_timer_join(self);
 
     __disable_irq();
 
@@ -161,7 +161,7 @@ void swire_bitbang_transaction_start(
     uint32_t slave_id) {
     if(swire->error != SwireBitbangErrorNone) return;
     int32_t rwid = (rw == SwireBitbangRwRead ? 0x80 : 0x00) | (slave_id & 0x7f);
-    swire_bitbang_timer_continue(swire);
+    swire_bitbang_timer_join(swire);
     _swire_bitbang_write_bits9(swire, 0x15a);
     _swire_bitbang_write_bits9(swire, (addr >> 16) & 0xff);
     _swire_bitbang_write_bits9(swire, (addr >> 8) & 0xff);
@@ -212,7 +212,7 @@ int32_t swire_bitbang_byte_read(SwireBitbang* self) {
     int32_t samples[2] = {0, (int32_t)bittimecyc * 0.2};
     uint32_t ticks[18];
 
-    swire_bitbang_timer_continue(self);
+    swire_bitbang_timer_join(self);
     __disable_irq();
     LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_OUTPUT);
     int32_t clkstart = swire_clock_get_cycclk() + 6;

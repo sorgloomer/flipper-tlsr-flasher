@@ -4,6 +4,7 @@
 #include <gui/scene_manager.h>
 
 enum SwireStartItem {
+    SwireStartItemBitbangRead,
     SwireStartItemBitbangTest,
     SwireStartItemFreqTest,
     SwireStartItemBitrate,

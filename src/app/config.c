@@ -4,7 +4,15 @@
 SwireConfig* swire_config_alloc() {
     SwireConfig* self = malloc(sizeof(SwireConfig));
     furi_check(self);
+
     self->bitrate = BitrateOptions__default;
+    self->addrsize = 3;
+    self->reset_duration_ms = 200;
+    self->reset_delay_ms = 70;
+    self->trigger_duration_us = 10;
+    self->trigger_delay_us = 10;
+    self->keep_powered_duration_ms = 200;
+
     return self;
 }
 
