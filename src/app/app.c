@@ -1,5 +1,7 @@
 #include <gui/view_dispatcher.h>
-#include <gui/view_dispatcher.h>
+
+#include <power/power_service/power.h>
+#include <input/input.h>
 
 #include "src/app/app.h"
 #include "src/app/blinker.h"
@@ -18,119 +20,136 @@ static void app_handle_cdc_state_changed(void* ctx, SwireUsb* sender, CdcState s
 static void app_handle_rx_one(SwireApp* app);
 static void app_send_welcome(SwireApp* app);
 
+static bool app_custom_event_callback(void* context, uint32_t event);
+static bool app_back_event_callback(void* context);
+static void app_tick_event_callback(void* context);
+
+static void app_do_event_flag_workaround_iteration(SwireApp* app);
+
 const GpioPin* const pin_sws = &gpio_ext_pa7;
 const GpioPin* const pin_back = &gpio_button_back;
-SwireApp* app = NULL;
-
-const SceneManagerHandlers app_scene_handlers = {
-
-};
+SwireApp* global_app = NULL;
 
 SwireApp* app_alloc() {
     SwireApp* self = malloc(sizeof(SwireApp));
     furi_check(self, "app_alloc");
+
     self->running = true;
+    self->usb = NULL;
+
     self->message = furi_string_alloc();
     self->message2 = furi_string_alloc();
     self->tmp_str1 = furi_string_alloc();
     self->tmp_str2 = furi_string_alloc();
     self->command = furi_string_alloc();
     self->last_tick = swire_clock_get_real_tick();
-    //self->queue = furi_message_queue_alloc(_QUEUE_CAPACITY, sizeof(SwMessage));
-    self->event_loop = furi_event_loop_alloc();
+    self->view_dispatcher = view_dispatcher_alloc();
+    self->event_loop = view_dispatcher_get_event_loop(self->view_dispatcher);
     self->timers = timerpool_alloc(self->event_loop);
-
-    //self->timer_poll = furi_event_loop_timer_alloc(
-    //    self->event_loop,
-    //    (FuriEventLoopTimerCallback)loop_iteration,
-    //    FuriEventLoopTimerTypePeriodic,
-    //    self);
-    //self->timer_debug = furi_event_loop_timer_alloc(
-    //    self->event_loop,
-    //    (FuriEventLoopTimerCallback)app_handle_periodic_debug_info,
-    //    FuriEventLoopTimerTypePeriodic,
-    //    self);
-    self->usb = NULL;
+    self->blinker = blinker_alloc(self->event_loop);
 
     self->gui = furi_record_open(RECORD_GUI);
-    self->view_dispatcher = view_dispatcher_alloc();
-    self->scene_manager = scene_manager_alloc(&app_scene_handlers, self);
+    self->power = furi_record_open(RECORD_POWER);
+
+    FURI_LOG_T("swire", "app_alloc checkpoint 5");
+    FURI_LOG_T("swire", "app_alloc checkpoint 6");
+
+    self->scene_manager = scene_manager_alloc(&swire_app_scene_handlers, self);
+    FURI_LOG_T("swire", "app_alloc checkpoint 7");
     self->widget = widget_alloc();
     self->notifications = furi_record_open(RECORD_NOTIFICATION);
     self->dialog = dialog_ex_alloc();
 
+    FURI_LOG_T("swire", "app_alloc checkpoint 8");
+    view_dispatcher_set_event_callback_context(self->view_dispatcher, self);
+    FURI_LOG_T("swire", "app_alloc checkpoint 8.1");
+    view_dispatcher_set_custom_event_callback(self->view_dispatcher, app_custom_event_callback);
+    FURI_LOG_T("swire", "app_alloc checkpoint 8.2");
+    view_dispatcher_set_navigation_event_callback(self->view_dispatcher, app_back_event_callback);
+    FURI_LOG_T("swire", "app_alloc checkpoint 8.3");
+    view_dispatcher_set_tick_event_callback(self->view_dispatcher, app_tick_event_callback, 100);
+    FURI_LOG_T("swire", "app_alloc checkpoint 8.4");
     view_dispatcher_attach_to_gui(self->view_dispatcher, self->gui, ViewDispatcherTypeFullscreen);
 
+    FURI_LOG_T("swire", "app_alloc checkpoint 9");
     self->var_item_list = variable_item_list_alloc();
     view_dispatcher_add_view(
-        app->view_dispatcher,
+        self->view_dispatcher,
         SwireAppViewVarItemList,
-        variable_item_list_get_view(app->var_item_list));
+        variable_item_list_get_view(self->var_item_list));
 
-    scene_manager_next_scene(app->scene_manager, SwireSceneStart);
+    FURI_LOG_T("swire", "app_alloc checkpoint 10");
+    scene_manager_next_scene(self->scene_manager, SwireSceneStart);
 
-    return self;
-}
-
-void app_init(SwireApp* self) {
-    app_set_blinker_state(self, BlinkerStateIdle);
-    if(self->usb != NULL) swire_usb_free(self->usb);
-    self->usb = swire_usb_alloc();
-    // swire_usb_set_on_rx_line(self->usb, handle_usb_rx_line, self);
-    // swire_usb_set_on_state_change(self->usb, app_handle_cdc_state_changed, self);
-
-    //furi_event_loop_timer_start(app->timer_poll, 50);
-    //furi_event_loop_timer_start(app->timer_debug, 250);
+    FURI_LOG_T("swire", "app_alloc checkpoint 11");
     app_set_timer(self, 50, FuriEventLoopTimerTypePeriodic, loop_iteration);
     app_set_timer(self, 250, FuriEventLoopTimerTypePeriodic, app_handle_periodic_debug_info);
 
-    //furi_event_loop_subscribe_message_queue(
-    //    self->event_loop, self->queue, FuriEventLoopEventIn, handle_app_message, app);
-    furi_event_loop_subscribe_event_flag(
-        self->event_loop,
-        swire_usb_get_event_flag_rx(self->usb),
-        FuriEventLoopEventIn,
-        handle_usb_event,
-        app);
-    // furi_event_loop_subscribe_message_queue(
-    //     self->event_loop,
-    //     swire_usb_get_queue(self->usb),
-    //     FuriEventLoopEventIn,
-    //     handle_usb_event,
-    //     app);
+    FURI_LOG_T("swire", "app_alloc checkpoint 12");
+    app_set_blinker_state(self, BlinkerStateIdle);
+
+    FURI_LOG_T("swire", "app_alloc return");
+    return self;
 }
 
-void app_deinit(SwireApp* self) {
-    variable_item_list_free(self->var_item_list);
+static bool app_custom_event_callback(void* context, uint32_t event) {
+    furi_assert(context);
+    SwireApp* app = context;
+    return scene_manager_handle_custom_event(app->scene_manager, event);
+}
 
-    furi_event_loop_unsubscribe(self->event_loop, swire_usb_get_event_flag_rx(self->usb));
-    // furi_event_loop_unsubscribe(self->event_loop, swire_usb_get_queue(self->usb));
-    swire_usb_free(self->usb);
-    self->usb = NULL;
+static bool app_back_event_callback(void* context) {
+    furi_assert(context);
+    SwireApp* app = context;
+    return scene_manager_handle_back_event(app->scene_manager);
+}
 
-    blinker_free(self->blinker);
-    self->blinker = NULL;
-    timerpool_free(self->timers);
-    self->timers = NULL;
+static void app_tick_event_callback(void* context) {
+    furi_assert(context);
+    SwireApp* app = context;
+    scene_manager_handle_tick_event(app->scene_manager);
+}
+
+void app_set_usb_enabled(SwireApp* self, bool value) {
+    if(value) {
+        if(self->usb == NULL) {
+            self->usb = swire_usb_alloc();
+            furi_event_loop_subscribe_event_flag(
+                self->event_loop,
+                swire_usb_get_event_flag_rx(self->usb),
+                FuriEventLoopEventIn,
+                handle_usb_event,
+                self);
+        }
+    } else {
+        if(self->usb != NULL) {
+            furi_event_loop_unsubscribe(self->event_loop, swire_usb_get_event_flag_rx(self->usb));
+            swire_usb_free(self->usb);
+            self->usb = NULL;
+        }
+    }
 }
 
 void app_free(SwireApp* self) {
     if(self == NULL) return;
+    swire_usb_free(self->usb);
+
+    view_dispatcher_remove_view(self->view_dispatcher, SwireAppViewVarItemList);
 
     dialog_ex_free(self->dialog);
     furi_record_close(RECORD_NOTIFICATION);
     widget_free(self->widget);
     variable_item_list_free(self->var_item_list);
     scene_manager_free(self->scene_manager);
-    view_dispatcher_free(self->view_dispatcher);
     furi_record_close(RECORD_GUI);
+    furi_record_close(RECORD_POWER);
 
     blinker_free(self->blinker);
     //if(self->timer_poll != NULL) furi_event_loop_timer_free(self->timer_poll);
     //if(self->timer_debug != NULL) furi_event_loop_timer_free(self->timer_debug);
     timerpool_free(self->timers);
-    swire_usb_free(self->usb);
-    furi_event_loop_free(self->event_loop);
+    view_dispatcher_free(self->view_dispatcher);
+    // furi_event_loop_free(self->event_loop); // owned and freed by view_dispatcher
     furi_string_free(self->message);
     furi_string_free(self->message2);
     furi_string_free(self->tmp_str1);
@@ -182,7 +201,7 @@ void app_set_timer(
 
 static void handle_usb_event(FuriEventLoopObject* object, void* context) {
     UNUSED(object);
-    SwireApp* app = (SwireApp*)context;
+    SwireApp* app = context;
     FuriEventFlag* flag = swire_usb_get_event_flag_rx(app->usb);
     SwUsbRxEvent events = furi_event_flag_clear(flag, SwUsbRxEventAll);
     // events result had the TxComplete flag even though it is not submitted to furi_event_flag_clear
@@ -207,9 +226,20 @@ static void handle_usb_event(FuriEventLoopObject* object, void* context) {
     }
 }
 
+static void app_do_event_flag_workaround_iteration(SwireApp* app) {
+    if(app->usb == NULL) return;
+    FuriEventFlag* flag = swire_usb_get_event_flag_rx(app->usb);
+    if(flag == NULL) return;
+    if(furi_event_flag_get(flag) & SwUsbRxEventAll) {
+        furi_event_flag_clear(flag, SwUsbRxEventDummy);
+        furi_event_flag_set(flag, SwUsbRxEventDummy);
+    }
+}
+
 void loop_iteration(SwireApp* app) {
     UNUSED(app);
 
+    /* TODO
     if(!furi_hal_gpio_read(&gpio_button_back)) {
         furi_string_set(app->command, "back button");
         furi_delay_ms(300);
@@ -227,21 +257,15 @@ void loop_iteration(SwireApp* app) {
     if(!furi_hal_gpio_read(&gpio_button_up)) {
         cmd_do_by_uart();
     }
-
+    */
 #if SW_USB_USE_POLLING_WORKAROUND == 1
-    if(app->usb) {
-        FuriEventFlag* flag = swire_usb_get_event_flag_rx(app->usb);
-        if(furi_event_flag_get(flag) & SwUsbRxEventAll) {
-            furi_event_flag_clear(flag, SwUsbRxEventDummy);
-            furi_event_flag_set(flag, SwUsbRxEventDummy);
-        }
-    }
+    app_do_event_flag_workaround_iteration(app);
 #endif
 }
 
 void global_stop_loop() {
-    app->running = false;
-    furi_event_loop_stop(app->event_loop);
+    global_app->running = false;
+    furi_event_loop_stop(global_app->event_loop);
 }
 
 static void app_handle_periodic_debug_info(SwireApp* app) {
@@ -251,7 +275,7 @@ static void app_handle_periodic_debug_info(SwireApp* app) {
 
 static void app_handle_cdc_state_changed(void* ctx, SwireUsb* sender, CdcState state) {
     UNUSED(sender);
-    SwireApp* app = (SwireApp*)ctx;
+    SwireApp* app = ctx;
     switch(state) {
     case CdcStateConnected:
         app_set_blinker_state(app, BlinkerStateConnected);
@@ -306,4 +330,8 @@ static void app_send_welcome(SwireApp* app) {
             break;
         }
     }
+}
+
+void app_run(SwireApp* self) {
+    view_dispatcher_run(self->view_dispatcher);
 }

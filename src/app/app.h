@@ -9,6 +9,7 @@
 #include <gui/modules/variable_item_list.h>
 #include <gui/modules/widget.h>
 
+#include <power/power_service/power.h>
 #include <notification/notification_messages.h>
 
 #include "src/usb.h"
@@ -37,6 +38,7 @@ typedef struct SwireApp {
     uint32_t debug_value_to_show;
 
     Gui* gui;
+    Power* power;
     NotificationApp* notifications;
     VariableItemList* var_item_list;
     ViewDispatcher* view_dispatcher;
@@ -59,9 +61,10 @@ typedef void (*SwireAppCallback)(SwireApp* app);
 void global_stop_loop();
 
 SwireApp* app_alloc();
-void app_init(SwireApp* self);
-void app_deinit(SwireApp* self);
 void app_free(SwireApp* self);
+void app_run(SwireApp* self);
+
+void app_set_usb_enabled(SwireApp* self, bool value);
 
 void app_set_blinker(SwireApp* app, uint32_t color, uint32_t interval_ms);
 void app_set_blinker_state(SwireApp* app, BlinkerState state);
@@ -75,4 +78,4 @@ void app_set_timer(
 
 extern const GpioPin* const pin_sws;
 extern const GpioPin* const pin_back;
-extern SwireApp* app;
+extern SwireApp* global_app;

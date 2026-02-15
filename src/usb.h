@@ -28,11 +28,6 @@ typedef enum {
 
 SwireUsb* swire_usb_alloc();
 void swire_usb_free(SwireUsb* self);
-// void swire_usb_set_on_rx_line(SwireUsb* self, SwireUsbRxLineCallback callback, void* context);
-// void swire_usb_set_on_state_change(
-//     SwireUsb* self,
-//     SwireUsbStateChangeCallback callback,
-//     void* context);
 
 FuriStatus swire_usb_printf(SwireUsb* self, const char* format, ...);
 FuriStatus swire_usb_printf_line(SwireUsb* self, const char* format, ...);

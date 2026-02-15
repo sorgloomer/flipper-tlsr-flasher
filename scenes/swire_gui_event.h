@@ -1,8 +1,8 @@
 #pragma once
 
 typedef enum {
-    SwireGuiEventTest = 0,
+    SwireGuiEvenBitbangTest = 0,
     SwireGuiEventErrorBack,
-    GpioStartEventOtgOn,
-    GpioStartEventOtgOff
+    SwireGuiEventUsbEnabledOn,
+    SwireGuiEventUsbEnabledbOff
 } SwireGuiEvent;

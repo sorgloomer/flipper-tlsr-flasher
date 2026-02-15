@@ -39,21 +39,20 @@ uint32_t app_get_all_event_flag_values(SwireApp* app) {
 int tlsr_swire_demo_app(void* p) {
     UNUSED(p);
 
+    FURI_LOG_I("swire", "tlsr_swire_demo_app start");
+    furi_delay_ms(200);
+
     global_debug_init();
     swire_bitbang_global_init();
 
-    app = app_alloc();
-    furi_delay_ms(1000); // ufbt freezes if we immediately hog the cli
-    app_init(app);
-    furi_event_loop_run(app->event_loop);
-    app_deinit(app);
-
-    // Typically when a pin is no longer in use, it is set to analog mode.
-    furi_hal_gpio_init_simple(pin_sws, GpioModeAnalog);
-
+    SwireApp* app = app_alloc();
+    global_app = app;
+    app_run(app);
+    global_app = NULL;
     app_free(app);
-    light_rgb_set(0);
 
+    furi_hal_gpio_init_simple(pin_sws, GpioModeAnalog);
+    light_rgb_set(0);
     global_debug_deinit();
     return 0;
 }
