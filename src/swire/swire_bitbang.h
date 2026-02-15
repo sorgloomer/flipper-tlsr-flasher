@@ -1,6 +1,7 @@
 #pragma once
 
 #include <furi.h>
+#include "src/swire/swire_common.h"
 
 typedef enum {
     SwireBitbangRwWrite = 0,
@@ -32,7 +33,7 @@ void swire_bitbang_global_init();
 void swire_bitbang_global_init_with_bitrate(uint32_t bitrate);
 void swire_bitbang_global_log_params();
 
-SwireBitbang* swire_bitbang_alloc_with_sws(const GpioPin* pin_sws_o, const GpioPin* pin_sws_i);
+SwireBitbang* swire_bitbang_alloc_with_sws(const IoPins sws);
 void swire_bitbang_free(SwireBitbang* swire);
 
 uint32_t swire_bitbang_get_bitrage(SwireBitbang* swire);

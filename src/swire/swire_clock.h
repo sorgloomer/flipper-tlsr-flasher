@@ -22,7 +22,8 @@ SWIRE_INLINE uint32_t swire_clock_us_to_tick(uint32_t us) {
 }
 
 SWIRE_INLINE bool swire_clock_tick_elapsed(uint32_t tick) {
-    // signed comparison to handle tick overflow
+    // Important to balance the comparison to 0 to keep
+    // integer overflows predictable
     return ((int32_t)(swire_clock_get_real_tick() - tick)) >= 0;
 }
 

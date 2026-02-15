@@ -3,9 +3,17 @@
 
 void cmd_bitbang_test_simple(SwireApp* app) {
     light_rgb_set(0xffff00);
-    SwireBitbang* swire = swire_bitbang_alloc_with_sws(&gpio_ext_pa7, &gpio_ext_pa6);
+    SwireBitbang* swire = swire_bitbang_alloc_with_sws((IoPins){
+        .out = &gpio_ext_pa7,
+        .in = &gpio_ext_pa6,
+    });
     swire_bitbang_set_bitrate(swire, app->config->bitrate);
+    swire_bitbang_transaction_start(swire, 0x0602, SwireBitbangRwWrite, 0);
     swire_bitbang_byte_write(swire, 0x05);
+    swire_bitbang_transaction_end(swire);
+    swire_bitbang_transaction_start(swire, 0x00b2, SwireBitbangRwWrite, 0);
+    swire_bitbang_byte_write(swire, 0x7f);
+    swire_bitbang_transaction_end(swire);
     swire_bitbang_free(swire);
     light_rgb_set(0x00ff00);
 }
@@ -13,7 +21,10 @@ void cmd_bitbang_test_simple(SwireApp* app) {
 void cmd_bitbang_read() {
     int32_t row[16];
 
-    SwireBitbang* swire = swire_bitbang_alloc_with_sws(&gpio_ext_pa7, &gpio_ext_pa6);
+    SwireBitbang* swire = swire_bitbang_alloc_with_sws((IoPins){
+        .out = &gpio_ext_pa7,
+        .in = &gpio_ext_pa6,
+    });
 
     swire_bitbang_transaction_start(swire, 0x0602, SwireBitbangRwWrite, 0);
     swire_bitbang_byte_write(swire, 0x05);
@@ -106,20 +117,19 @@ void cmd_bitbang_test_switching_freq(SwireApp* app) {
     volatile uint32_t* odr = &pin->port->ODR;
     uint32_t bits1 = pin->pin;
     uint32_t bits0 = ~bits1;
+    volatile int dummy_acc = 0;
 
-    furi_hal_gpio_init(pin, GpioModeOutputOpenDrain, GpioPullUp, GpioSpeedVeryHigh);
-    for(int i = 0; i < 10000; i++) {
+    furi_hal_gpio_init(pin, GpioModeOutputPushPull, GpioPullUp, GpioSpeedVeryHigh);
+    __disable_irq();
+    for(volatile int i = 0; i < 10000;) {
         *odr &= bits0;
-        *odr |= bits1;
-        *odr &= bits0;
-        *odr |= bits1;
-        *odr &= bits0;
-        *odr |= bits1;
-        *odr &= bits0;
-        *odr |= bits1;
-        *odr &= bits0;
+        i++;
+        asm("nop");
         *odr |= bits1;
     }
+    __enable_irq();
+
+    FURI_LOG_D("swire", "log accumulator to prevent optimization %d", dummy_acc);
 
     furi_hal_gpio_init_simple(pin, GpioModeAnalog);
 }

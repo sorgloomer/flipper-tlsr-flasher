@@ -308,6 +308,9 @@ static void app_handle_rx_one(SwireApp* app) {
     FuriEventFlag* flag = swire_usb_get_event_flag_rx(app->usb);
 
     global_debug()->evt_rx++;
+    // the event loop handler removes this flag atomically. we put that flag
+    // back here because the callee will first attempt to wait for the rx
+    // available flag
     furi_event_flag_set(flag, SwUsbRxEventRxAvailable);
     FuriStatus status = swire_usb_readline_str(app->usb, app->command);
     furi_string_printf(app->message, "rls %08x", status);
