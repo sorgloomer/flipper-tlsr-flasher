@@ -1,7 +1,7 @@
 #pragma once
 
 #include "src/app/app.h"
-#include "src/global_debug.h"
+#include "src/utils/global_debug.h"
 #include "src/swire/swire_bitbang.h"
 #include "src/commands/commands_bitbang.h"
 

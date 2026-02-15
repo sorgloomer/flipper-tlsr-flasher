@@ -12,8 +12,8 @@
 #include <power/power_service/power.h>
 #include <notification/notification_messages.h>
 
-#include "src/usb.h"
-#include "src/timerpool.h"
+#include "src/usb/usb.h"
+#include "src/utils/timerpool.h"
 #include "src/app/blinker.h"
 #include "src/app/config.h"
 

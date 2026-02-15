@@ -1,0 +1,1 @@
+ufbt && /c/Users/person/.ufbt/toolchain/x86_64-windows/bin/arm-none-eabi-objdump.exe -d dist/debug/tlsr_swire_demo_d.elf > dist/app.asm

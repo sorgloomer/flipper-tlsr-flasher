@@ -1,8 +1,10 @@
 #pragma once
 
 typedef enum {
-    SwireGuiEvenBitbangTest = 0,
+    SwireGuiEventBitbangTest = 1,
+    SwireGuiEventFreqTest,
     SwireGuiEventErrorBack,
     SwireGuiEventUsbEnabledOn,
     SwireGuiEventUsbEnabledbOff
 } SwireGuiEvent;
+#define SwireGuiEvent__count 5

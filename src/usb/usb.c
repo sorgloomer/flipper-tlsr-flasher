@@ -1,6 +1,6 @@
-#include "src/usb.h"
-#include "src/global_debug.h"
-#include "src/ringbuffer.h"
+#include "src/usb/usb.h"
+#include "src/utils/global_debug.h"
+#include "src/utils/ringbuffer.h"
 
 #include "usb_cdc.h"
 

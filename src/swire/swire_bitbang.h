@@ -52,3 +52,6 @@ void swire_bitbang_transaction_end_force(SwireBitbang* swire);
 
 void swire_bitbang_byte_write(SwireBitbang* swire, uint8_t data);
 int32_t swire_bitbang_byte_read(SwireBitbang* swire);
+
+// export for disassembling
+// void _swire_bitbang_write_bits9(SwireBitbang* self, uint32_t bits);

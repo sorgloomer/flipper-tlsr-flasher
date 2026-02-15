@@ -98,3 +98,28 @@ void cmd_bitbang_read_top(uint32_t bitrate) {
     cmd_bitbang_read();
     furi_delay_ms(500);
 }
+
+void cmd_bitbang_test_switching_freq(SwireApp* app) {
+    UNUSED(app);
+
+    const GpioPin* pin = &gpio_ext_pa7;
+    volatile uint32_t* odr = &pin->port->ODR;
+    uint32_t bits1 = pin->pin;
+    uint32_t bits0 = ~bits1;
+
+    furi_hal_gpio_init(pin, GpioModeOutputOpenDrain, GpioPullUp, GpioSpeedVeryHigh);
+    for(int i = 0; i < 10000; i++) {
+        *odr &= bits0;
+        *odr |= bits1;
+        *odr &= bits0;
+        *odr |= bits1;
+        *odr &= bits0;
+        *odr |= bits1;
+        *odr &= bits0;
+        *odr |= bits1;
+        *odr &= bits0;
+        *odr |= bits1;
+    }
+
+    furi_hal_gpio_init_simple(pin, GpioModeAnalog);
+}

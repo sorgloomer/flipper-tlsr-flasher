@@ -7,12 +7,10 @@
 #include "src/app/app.h"
 #include "src/app/blinker.h"
 #include "src/swire/swire_clock.h"
-#include "src/global_debug.h"
+#include "src/utils/global_debug.h"
 #include "src/commands/commands.h"
-#include "src/commands/commands_bitbang.h"
-#include "src/commands/commands_uart.h"
 
-#include "scenes/swire_scene.h"
+#include "src/scenes/swire_scene.h"
 
 static void handle_usb_event(FuriEventLoopObject* object, void* context);
 static void loop_iteration(SwireApp* app);

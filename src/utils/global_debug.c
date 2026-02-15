@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include <src/global_debug.h>
+#include <src/utils/global_debug.h>
 
 GlobalDebugInfo* global_debug_value = NULL;
 

@@ -4,9 +4,9 @@
 #include <dolphin/dolphin.h>
 #include <string.h>
 
-#include "scenes/swire_scene.h"
-#include "scenes/swire_scene_start.h"
-#include "scenes/swire_gui_event.h"
+#include "src/scenes/swire_scene.h"
+#include "src/scenes/swire_scene_start.h"
+#include "src/scenes/swire_gui_event.h"
 #include "src/app/app.h"
 #include "src/utils/light_rgb.h"
 #include "src/commands/commands_bitbang.h"
@@ -32,14 +32,6 @@ const uint32_t bitrates[] = {
 };
 const uint32_t bitrates__count = sizeof(bitrates) / sizeof(bitrates[0]);
 
-enum SwireStartItem {
-    SwireStartItemBitbangTest,
-    SwireStartItemBitrate,
-    SwireStartItemGpioManual,
-    SwireStartItemUsbOnOff,
-    SwireStartItem__count,
-};
-
 enum SwireUsbEnabled {
     SwireUsbEnabledOff,
     SwireUsbEnabledOn,
@@ -60,7 +52,10 @@ static void scene_start_var_list_enter_callback(void* context, uint32_t index) {
     SwireApp* app = context;
     switch(index) {
     case SwireStartItemBitbangTest:
-        view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEvenBitbangTest);
+        view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEventBitbangTest);
+        break;
+    case SwireStartItemFreqTest:
+        view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEventFreqTest);
         break;
     }
 }
@@ -106,6 +101,9 @@ void swire_scene_start_on_enter(void* context) {
         case SwireStartItemBitbangTest:
             variable_item_list_add(var_item_list, "BitBang Test", 0, NULL, NULL);
             break;
+        case SwireStartItemFreqTest:
+            variable_item_list_add(var_item_list, "bitbang freq test", 0, NULL, NULL);
+            break;
         case SwireStartItemGpioManual:
             variable_item_list_add(var_item_list, "GPIO Manual Control", 0, NULL, NULL);
             break;
@@ -146,8 +144,11 @@ bool swire_scene_start_on_event(void* context, SceneManagerEvent event) {
         return false;
     }
     switch(event.event) {
-    case SwireGuiEvenBitbangTest:
+    case SwireGuiEventBitbangTest:
         cmd_bitbang_test_simple(app);
+        break;
+    case SwireGuiEventFreqTest:
+        cmd_bitbang_test_switching_freq(app);
         break;
     case SwireGuiEventUsbEnabledOn:
         app_set_usb_enabled(app, true);
