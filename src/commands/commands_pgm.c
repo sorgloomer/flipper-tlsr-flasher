@@ -5,6 +5,7 @@
 #include "src/app/app.h"
 #include "src/swire/swire_bitbang.h"
 
+#define _OK_RESPONSES 0
 static SwireBitbang* cmd_swire_alloc(SwireApp* app) {
     SwireBitbang* swire = swire_bitbang_alloc_with_sws((IoPins){
         .in = &gpio_ext_pa7,
@@ -15,26 +16,43 @@ static SwireBitbang* cmd_swire_alloc(SwireApp* app) {
 }
 
 void cmd_pgm_init(SwireApp* app, const char* params) {
+    if(app->usb == NULL) {
+        FURI_LOG_E("swire", "cmd_pgm_transaction_start swire->usb not initialized");
+        return;
+    }
     const char* rest = strchr(params, ' ');
-    if(rest == NULL) return;
+    if(rest == NULL) {
+        swire_usb_printf_line(app->usb, "error no params");
+        return;
+    }
     int matched = sscanf(rest, "%ld %ld", &app->config->addrsize, &app->config->bitrate);
-    if(matched != 2) return;
+    if(matched != 2) {
+        swire_usb_printf_line(app->usb, "error params %d", matched);
+        return;
+    }
 
     swire_bitbang_free(app->swire);
     app->swire = cmd_swire_alloc(app);
 
+#if _OK_RESPONSES == 1
     swire_usb_writeline_cstr(app->usb, "ok");
+#endif
 }
 
 void cmd_pgm_transaction_start(SwireApp* app, const char* params) {
-    const char* rest = strchr(params, ' ');
-    if(rest == NULL) return;
-    int32_t addr, wr, slaveid;
-    int matched = sscanf(rest, "%lx %lx %lx", &addr, &wr, &slaveid);
-    if(matched != 3) return;
-
     if(app->usb == NULL) {
         FURI_LOG_E("swire", "cmd_pgm_transaction_start swire->usb not initialized");
+        return;
+    }
+    const char* rest = strchr(params, ' ');
+    if(rest == NULL) {
+        swire_usb_printf_line(app->usb, "error no params");
+        return;
+    }
+    int32_t addr, wr, slaveid;
+    int matched = sscanf(rest, "%lx %lx %lx", &addr, &wr, &slaveid);
+    if(matched != 3) {
+        swire_usb_printf_line(app->usb, "error params %d");
         return;
     }
 
@@ -47,6 +65,9 @@ void cmd_pgm_transaction_start(SwireApp* app, const char* params) {
     swire_bitbang_transaction_start(
         app->swire, addr, wr ? SwireBitbangRwRead : SwireBitbangRwWrite, slaveid);
     swire_bitbang_timer_join(app->swire);
+#if _OK_RESPONSES == 1
+    swire_usb_writeline_cstr(app->usb, "ok");
+#endif
 }
 
 void cmd_pgm_transaction_end(SwireApp* app) {
@@ -62,19 +83,27 @@ void cmd_pgm_transaction_end(SwireApp* app) {
     }
     swire_bitbang_transaction_end(app->swire);
     swire_bitbang_timer_join(app->swire);
+#if _OK_RESPONSES == 1
+    swire_usb_writeline_cstr(app->usb, "ok");
+#endif
 }
 
 FuriStatus cmd_pgm_bytes_write(SwireApp* app, const char* params) {
-    FuriStatus status;
-    const char* rest = strchr(params, ' ');
-    if(rest == NULL) return FuriStatusErrorParameter;
-    int32_t bytecount;
-    int matched = sscanf(rest, "%lx", &bytecount);
-    if(matched != 1) return FuriStatusErrorParameter;
-
     if(app->usb == NULL) {
         FURI_LOG_E("swire", "cmd_pgm_bytes_write swire->usb not initialized");
         return FuriStatusErrorResource;
+    }
+    FuriStatus status;
+    const char* rest = strchr(params, ' ');
+    if(rest == NULL) {
+        swire_usb_printf_line(app->usb, "error no params");
+        return FuriStatusErrorParameter;
+    }
+    int32_t bytecount;
+    int matched = sscanf(rest, "%lx", &bytecount);
+    if(matched != 1) {
+        swire_usb_printf_line(app->usb, "error params matched %d", matched);
+        return FuriStatusErrorParameter;
     }
 
     if(app->swire == NULL) {
@@ -106,22 +135,29 @@ FuriStatus cmd_pgm_bytes_write(SwireApp* app, const char* params) {
         swire_bitbang_byte_write(app->swire, buffer[i]);
     }
     swire_bitbang_timer_join(app->swire);
+#if _OK_RESPONSES == 1
     swire_usb_writeline_cstr(app->usb, "ok");
+#endif
     free(buffer);
     return FuriStatusOk;
 }
 
 FuriStatus cmd_pgm_bytes_read(SwireApp* app, const char* params) {
-    FuriStatus status;
-    const char* rest = strchr(params, ' ');
-    if(rest == NULL) return FuriStatusErrorParameter;
-    int32_t bytecount;
-    int matched = sscanf(rest, "%lx", &bytecount);
-    if(matched != 1) return FuriStatusErrorParameter;
-
     if(app->usb == NULL) {
         FURI_LOG_E("swire", "cmd_pgm_bytes_read swire->usb not initialized");
         return FuriStatusErrorResource;
+    }
+    FuriStatus status;
+    const char* rest = strchr(params, ' ');
+    if(rest == NULL) {
+        swire_usb_printf_line(app->usb, "error no params");
+        return FuriStatusErrorParameter;
+    }
+    int32_t bytecount;
+    int matched = sscanf(rest, "%lx", &bytecount);
+    if(matched != 1) {
+        swire_usb_printf_line(app->usb, "error params matched %d", matched);
+        return FuriStatusErrorParameter;
     }
 
     if(app->swire == NULL) {
@@ -148,7 +184,9 @@ FuriStatus cmd_pgm_bytes_read(SwireApp* app, const char* params) {
         buffer[i] = swire_bitbang_byte_read(app->swire);
     }
 
+#if _OK_RESPONSES == 1
     swire_usb_writeline_cstr(app->usb, "ok");
+#endif
     status = swire_usb_write(app->usb, buffer, bytecount);
     if(status & FuriFlagError) {
         return status;
@@ -160,12 +198,19 @@ FuriStatus cmd_pgm_bytes_read(SwireApp* app, const char* params) {
 }
 
 FuriStatus cmd_pgm_reset(SwireApp* app) {
+    if(app->usb == NULL) {
+        FURI_LOG_E("swire", "cmd_pgm_reset swire->usb not initialized");
+        return FuriStatusErrorResource;
+    }
     const GpioPin* pin_power = &gpio_ext_pb2;
     furi_hal_gpio_init_simple(pin_power, GpioModeOutputPushPull);
     furi_hal_gpio_write(pin_power, false);
     furi_delay_ms(app->config->reset_duration_ms);
     furi_hal_gpio_write(pin_power, true);
     furi_delay_ms(app->config->reset_delay_ms);
+    swire_usb_printf_line(
+        app->usb, "# %ld %ld", app->config->reset_duration_ms, app->config->reset_delay_ms);
+    swire_usb_writeline_cstr(app->usb, "ok");
     return FuriStatusOk;
 }
 

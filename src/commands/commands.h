@@ -9,13 +9,18 @@
 void handle_text_command(SwireApp* app, FuriString* cmd) {
     SwireUsb* usb = app->usb;
 
-    swire_usb_printf_line(usb, " > %s", cmd);
+    swire_usb_printf_line(usb, "# > %s", furi_string_get_cstr(cmd));
     if(furi_string_equal(cmd, "ga7g4drb info") || furi_string_equal(cmd, "info")) {
         swire_usb_printf_line(usb, "flitswire info response start");
         swire_usb_printf_line(usb, "version=v%s", APP_VERSION);
         swire_usb_printf_line(usb, "bitrate=TODO");
         swire_usb_printf_line(usb, "trigger_delay=TODO");
         swire_usb_printf_line(usb, "end");
+        return;
+    }
+
+    if(furi_string_equal(cmd, "ping")) {
+        swire_usb_printf_line(usb, "pong");
         return;
     }
 

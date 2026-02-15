@@ -7,24 +7,28 @@ def main():
 
     with closing(fl_open()) as flipper:
 
-        flipper.write(b"ga7g4drb info")
-        line = flipper.readline()
-        print(f" < {line}")
-        if flipper.readline() != "flitswire info response start":
+        flipper.write(b"ga7g4drb info\n")
+        line = fl_readline(flipper)
+        if line != "flitswire info response start":
             print("[E] swire emulator not running")
             return
         fl_read_until_line(flipper, "end")
 
         flipper.write(b"swire_init 3 75000\n")
+        fl_ping(flipper)
+        flipper.write(b"reset\n")
         if fl_readline(flipper) != "ok":
             return
 
+        fl_ping(flipper)
         fl_write(flipper, 0x0602, 0, b"\x05")  # CPU Stop
+        fl_ping(flipper)
         fl_write(flipper, 0x00B2, 0, b"\x7f")  # b0-b4 SWIRE
-
+        fl_ping(flipper)
         sanity_check = fl_read(flipper, 0x00B2, 0, 1)  # b0-b4 SWIRE
+        print(f"sanity_check: {sanity_check.hex()}")
         if sanity_check != b"\x7f":
-            print(f"[E] sanity_check failed {sanity_check.decode('hex')}")
+            print(f"[E] sanity_check failed {sanity_check.hex()}")
             return
 
         # MSPI = Memory SPI
@@ -54,32 +58,38 @@ def main():
             print(f"DUMP {addr:06x}: {buf.encode('hex')}")
 
 
+def fl_ping(fl):
+    fl.write(b"ping\n")
+    fl_read_until_line(fl, "pong")
+
+
 def fl_write(fl, addr, slaveid, buf):
-    fl.write(f"trs {addr:x} 0 {slaveid:x}\n".encode("utf-8"))
-    if fl_readline(fl) != "ok":
-        raise Exception()
-    fl.write(f"bw {len(buf):x}\n".encode("utf-8"))
-    fl.write(buf)
-    if fl_readline(fl) != "ok":
-        raise Exception()
-    fl.write(b"tre\n")
-    if fl_readline(fl) != "ok":
-        raise Exception()
+    fl.write(
+        b"".join(
+            [
+                f"trs {addr:x} 0 {slaveid:x}\n".encode("utf-8"),
+                f"bw {len(buf):x}\n".encode("utf-8"),
+                buf,
+                b"tre\n",
+            ]
+        )
+    )
 
 
 def fl_read(fl, addr, slaveid, readlen):
-    fl.write(f"trs {addr:x} 1 {slaveid:x}\n".encode("utf-8"))
-    if fl_readline(fl) != "ok":
-        raise Exception()
-    fl.write(f"br {readlen:x}\n".encode("utf-8"))
-    if fl_readline(fl) != "ok":
-        raise Exception()
+    fl.write(
+        b"".join(
+            [
+                f"trs {addr:x} 1 {slaveid:x}\n".encode("utf-8"),
+                f"br {readlen:x}\n".encode("utf-8"),
+            ]
+        )
+    )
     result = fl.read(readlen)
+    fl.write(b"tre\n")
     if len(result) != readlen:
         raise Exception()
-    fl.write(b"tre\n")
-    if fl_readline(fl) != "ok":
-        raise Exception()
+    return result
 
 
 def fl_read_until_line(fl, search):
@@ -87,7 +97,7 @@ def fl_read_until_line(fl, search):
         line = fl_readline(fl)
         if line is None:
             print(f" <* closed")
-            return
+            raise Exception()
         if line == search:
             return
 
@@ -114,12 +124,14 @@ def read_everything(flipper):
 
 
 def fl_readline(flipper):
-    line = flipper.readline()
-    if not line:
-        return None
-    line = line.decode("utf-8").rstrip("\r\n")
-    print(" < " + line)
-    return line
+    while True:
+        line = flipper.readline()
+        if not line:
+            return None
+        line = line.decode("utf-8").rstrip("\r\n")
+        print(" < " + line)
+        if not line.startswith("#"):
+            return line
 
 
 if __name__ == "__main__":
