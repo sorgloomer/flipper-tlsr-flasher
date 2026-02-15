@@ -37,7 +37,7 @@ FuriStatus swire_usb_write_str(SwireUsb* self, FuriString* msg);
 FuriStatus swire_usb_writeline_cstr(SwireUsb* self, const char* msg);
 FuriStatus swire_usb_writeline_str(SwireUsb* self, FuriString* msg);
 FuriStatus swire_usb_write_flush(SwireUsb* self);
-bool swire_usb_set_auto_flush(SwireUsb* self, bool flush_auto);
+bool swire_usb_set_auto_flush(SwireUsb* self, bool auto_flush);
 
 FuriStatus swire_usb_read(SwireUsb* self, uint8_t* buffer, uint32_t buffer_size);
 FuriStatus swire_usb_readline_str(SwireUsb* self, FuriString* output);

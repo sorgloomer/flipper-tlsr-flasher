@@ -464,6 +464,12 @@ static void vcp_irq_on_cdc_rx(void* context) {
 #endif
 }
 
+bool swire_usb_set_auto_flush(SwireUsb* self, bool auto_flush) {
+    bool old = self->auto_flush;
+    self->auto_flush = auto_flush;
+    return old;
+}
+
 static void vcp_irq_state_callback(void* context, CdcState state) {
     UNUSED(context);
     UNUSED(state);
