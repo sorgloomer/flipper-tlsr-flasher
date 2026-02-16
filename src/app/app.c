@@ -96,6 +96,7 @@ SwireApp* app_alloc() {
 
 void app_free(SwireApp* self) {
     if(self == NULL) return;
+    app_set_usb_enabled(self, false);
     swire_usb_free(self->usb);
     swire_bitbang_free(self->swire);
 
