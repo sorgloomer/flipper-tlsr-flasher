@@ -44,6 +44,7 @@ SwireApp* app_alloc() {
     self->tmp_str1 = furi_string_alloc();
     self->tmp_str2 = furi_string_alloc();
     self->command = furi_string_alloc();
+    self->logs = furi_string_alloc();
     self->last_tick = swire_clock_get_cycclk();
     self->view_dispatcher = view_dispatcher_alloc();
     self->event_loop = view_dispatcher_get_event_loop(self->view_dispatcher);
@@ -120,6 +121,7 @@ void app_free(SwireApp* self) {
     furi_string_free(self->message2);
     furi_string_free(self->tmp_str1);
     furi_string_free(self->tmp_str2);
+    furi_string_free(self->logs);
     furi_string_free(self->command);
     // furi_event_loop_unsubscribe(self->event_loop, self->queue);
     // furi_message_queue_free(self->queue);
@@ -343,4 +345,16 @@ static void app_send_welcome(SwireApp* app) {
 
 void app_run(SwireApp* self) {
     view_dispatcher_run(self->view_dispatcher);
+}
+
+FuriString* app_get_logs(SwireApp* self) {
+    return self->logs;
+}
+
+void app_log_append_line(SwireApp* self, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    furi_string_cat_vprintf(self->logs, format, args);
+    va_end(args);
+    furi_string_cat(self->logs, "\n");
 }

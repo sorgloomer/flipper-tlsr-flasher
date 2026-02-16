@@ -41,6 +41,14 @@ void handle_text_command(SwireApp* app, FuriString* cmd) {
         return;
     }
 
+    if(furi_string_equal(cmd, "chk")) {
+        FuriString* logs = app_get_logs(app);
+        furi_string_cat(logs, "end\n");
+        swire_usb_write_cstr(usb, furi_string_get_cstr(logs));
+        furi_string_reset(logs);
+        return;
+    }
+
     if(cmd_pgm(app, cmd)) {
         return;
     }

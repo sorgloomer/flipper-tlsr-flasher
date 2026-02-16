@@ -63,12 +63,12 @@ void cmd_pgm_init(SwireApp* app, const char* cargs) {
         return;
     }
     if(cargs == NULL) {
-        swire_usb_printf_line(app->usb, "error no params");
+        app_log_append(app, "error no params");
         return;
     }
     int matched = sscanf(cargs, "%ld %ld", &app->config->addrsize, &app->config->bitrate);
     if(matched != 2) {
-        swire_usb_printf_line(app->usb, "error params %d", matched);
+        app_log_append(app, "error params %d", matched);
         return;
     }
 
