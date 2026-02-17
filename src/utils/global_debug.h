@@ -1,5 +1,6 @@
 #pragma once
 
+#include "src/app/app.h"
 #include <stdint.h>
 #include <furi.h>
 

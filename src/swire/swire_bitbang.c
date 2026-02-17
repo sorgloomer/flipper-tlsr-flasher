@@ -1,3 +1,5 @@
+#include "src/usb/usb.h"
+#include "src/utils/global_debug.h"
 #include <stdlib.h>
 #include <furi.h>
 #include <furi_hal_resources.h>
@@ -130,7 +132,7 @@ void _swire_bitbang_write_bits9(SwireBitbang* self, uint32_t bits) {
     }
 #endif
 
-    LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_OUTPUT);
+    // LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_OUTPUT);
 #if _PRECALCULATE_SAMPLE_TRANSLATE != 1
     int32_t clk_offset = swire_clock_get_cycclk() + 6;
 #endif
@@ -144,7 +146,7 @@ void _swire_bitbang_write_bits9(SwireBitbang* self, uint32_t bits) {
     _ONEBIT(7);
     _ONEBIT(8);
     _ONEBIT(9);
-    LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_INPUT);
+    // LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_INPUT);
     __enable_irq();
 
 #if _PRECALCULATE_SAMPLE_TRANSLATE == 1
@@ -155,18 +157,22 @@ void _swire_bitbang_write_bits9(SwireBitbang* self, uint32_t bits) {
 }
 
 void swire_bitbang_transaction_start(
-    SwireBitbang* swire,
+    SwireBitbang* self,
     uint32_t addr,
     SwireBitbangRw rw,
     uint32_t slave_id) {
-    if(swire->error != SwireBitbangErrorNone) return;
+    if(self->error != SwireBitbangErrorNone) return;
     int32_t rwid = (rw == SwireBitbangRwRead ? 0x80 : 0x00) | (slave_id & 0x7f);
-    swire_bitbang_timer_join(swire);
-    _swire_bitbang_write_bits9(swire, 0x15a);
-    _swire_bitbang_write_bits9(swire, (addr >> 16) & 0xff);
-    _swire_bitbang_write_bits9(swire, (addr >> 8) & 0xff);
-    _swire_bitbang_write_bits9(swire, (addr >> 0) & 0xff);
-    _swire_bitbang_write_bits9(swire, rwid);
+    swire_bitbang_timer_join(self);
+
+    const GpioPin* pin_sws_o = self->pin_sws_o;
+    LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_OUTPUT);
+    _swire_bitbang_write_bits9(self, 0x15a);
+    _swire_bitbang_write_bits9(self, (addr >> 16) & 0xff);
+    _swire_bitbang_write_bits9(self, (addr >> 8) & 0xff);
+    _swire_bitbang_write_bits9(self, (addr >> 0) & 0xff);
+    _swire_bitbang_write_bits9(self, rwid);
+    LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_INPUT);
 }
 
 void swire_bitbang_transaction_end(SwireBitbang* swire) {
@@ -174,13 +180,19 @@ void swire_bitbang_transaction_end(SwireBitbang* swire) {
     swire_bitbang_transaction_end_force(swire);
 }
 
-void swire_bitbang_transaction_end_force(SwireBitbang* swire) {
-    _swire_bitbang_write_bits9(swire, 0x1ff);
+void swire_bitbang_transaction_end_force(SwireBitbang* self) {
+    const GpioPin* pin_sws_o = self->pin_sws_o;
+    LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_OUTPUT);
+    _swire_bitbang_write_bits9(self, 0x1ff);
+    LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_INPUT);
 }
 
-void swire_bitbang_byte_write(SwireBitbang* swire, uint8_t data) {
-    if(swire_bitbang_has_error(swire)) return;
-    _swire_bitbang_write_bits9(swire, data);
+void swire_bitbang_byte_write(SwireBitbang* self, uint8_t data) {
+    if(swire_bitbang_has_error(self)) return;
+    const GpioPin* pin_sws_o = self->pin_sws_o;
+    LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_OUTPUT);
+    _swire_bitbang_write_bits9(self, data);
+    LL_GPIO_SetPinMode(pin_sws_o->port, pin_sws_o->pin, LL_GPIO_MODE_INPUT);
 }
 
 #define _SWIRE_WAIT_BIT(tick0, tick1)                                    \

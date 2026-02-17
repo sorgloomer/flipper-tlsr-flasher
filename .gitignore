@@ -1,6 +1,7 @@
 dist/*
 /.vscode/*
 !/.vscode/extensions.json
+.dumps
 .clang-format
 .clangd
 .editorconfig

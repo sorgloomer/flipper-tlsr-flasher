@@ -11,6 +11,7 @@ typedef enum {
 typedef enum {
     SwireBitbangErrorNone = 0,
     SwireBitbangErrorTimeout = 1,
+    SwireBitbangErrorUnknown,
 } SwireBitbangError;
 
 #define _WAVEFORM_BUFFER_LENGTH 30

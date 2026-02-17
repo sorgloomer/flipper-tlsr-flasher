@@ -13,10 +13,12 @@
 #define USB_CDC_PKT_LEN      CDC_DATA_SZ
 #define USB_UART_RX_BUF_SIZE (USB_CDC_PKT_LEN * 5)
 #define USB_CDC_RX_BUF_SIZE  USB_CDC_PKT_LEN
+#define USB_CDC_TX_BUF_SIZE  USB_CDC_PKT_LEN
+
 // #define USB_CDC_RX_RINGBUF_SIZE 300
-#define SW_LINE_BUFFER_SIZE  500
-#define USB_CDC_BIT_DTR      (1 << 0)
-#define USB_CDC_BIT_RTS      (1 << 1)
+#define SW_LINE_BUFFER_SIZE 500
+#define USB_CDC_BIT_DTR     (1 << 0)
+#define USB_CDC_BIT_RTS     (1 << 1)
 
 #define WORKER_ALL_RX_EVENTS \
     (WorkerEvtCfgChange | WorkerEvtLineCfgSet | WorkerEvtCtrlLineSet | WorkerEvtCdcTxComplete)
@@ -77,8 +79,8 @@ struct SwireUsb {
     uint8_t* buffer_tx_building;
     uint32_t buffer_rx_size;
     uint8_t buffer_rx[USB_CDC_RX_BUF_SIZE];
-    uint8_t buffer_tx_1[USB_CDC_PKT_LEN];
-    uint8_t buffer_tx_2[USB_CDC_PKT_LEN];
+    uint8_t buffer_tx_1[USB_CDC_TX_BUF_SIZE];
+    uint8_t buffer_tx_2[USB_CDC_TX_BUF_SIZE];
 };
 
 typedef enum {
@@ -219,7 +221,7 @@ FuriStatus swire_usb_printf(SwireUsb* self, const char* format, ...) {
     return swire_usb_write_str(self, self->string_tx);
 }
 
-FuriStatus swire_usb_printf_line(SwireUsb* self, const char* format, ...) {
+FuriStatus swire_usb_printf_ln(SwireUsb* self, const char* format, ...) {
     va_list args;
     va_start(args, format);
     int printed = furi_string_vprintf(self->string_tx, format, args);
@@ -253,7 +255,7 @@ FuriStatus swire_usb_writeline_cstr(SwireUsb* self, const char* msg) {
     status = swire_usb_write_cstr(self, msg);
     swire_usb_set_auto_flush(self, auto_flush_restore);
     STATUS_EXPECT_OK(status);
-    return swire_usb_write_cstr(self, "\r\n");
+    return swire_usb_write_cstr(self, "\n");
 }
 FuriStatus swire_usb_writeline_str(SwireUsb* self, FuriString* msg) {
     return swire_usb_writeline_cstr(self, furi_string_get_cstr(msg));
@@ -375,23 +377,21 @@ static int32_t
     uint8_t* original_buffer = buffer;
     uint32_t to_serve_from_leftover = MIN(buffer_size, self->buffer_rx_size);
     if(to_serve_from_leftover > 0) {
-        uint32_t reading_count = until < 0 ? to_serve_from_leftover : ({
-            uint8_t* find = memchr(self->buffer_rx, until, to_serve_from_leftover);
-            if(find == NULL) {
-                global_debug()->rx_trace = to_serve_from_leftover * 100 + 1;
-                // not returning incomplete lines!
-                return FuriStatusError;
-            }
-            (uint32_t)(find - self->buffer_rx + 1);
-        });
+        uint32_t reading_count = to_serve_from_leftover;
+        uint8_t* found_until = NULL;
+        if(until >= 0) {
+            found_until = memchr(self->buffer_rx, until, to_serve_from_leftover);
+        }
+        if(found_until != NULL) {
+            reading_count = (uint32_t)(found_until - self->buffer_rx + 1);
+        }
         memcpy(buffer, buffer_rx, reading_count);
         buffer += reading_count;
         buffer_size -= reading_count;
         uint32_t new_leftover = self->buffer_rx_size - reading_count;
         self->buffer_rx_size = new_leftover;
-        if(new_leftover > 0) {
-            memcpy(buffer_rx, buffer_rx + reading_count, new_leftover);
-            global_debug()->rx_trace = 2;
+        memcpy(buffer_rx, buffer_rx + reading_count, new_leftover);
+        if(found_until != NULL) {
             goto exit_with_leftovers;
         }
     }

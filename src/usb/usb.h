@@ -30,7 +30,7 @@ SwireUsb* swire_usb_alloc();
 void swire_usb_free(SwireUsb* self);
 
 FuriStatus swire_usb_printf(SwireUsb* self, const char* format, ...);
-FuriStatus swire_usb_printf_line(SwireUsb* self, const char* format, ...);
+FuriStatus swire_usb_printf_ln(SwireUsb* self, const char* format, ...);
 FuriStatus swire_usb_write(SwireUsb* self, uint8_t* buffer, uint32_t buffer_size);
 FuriStatus swire_usb_write_cstr(SwireUsb* self, const char* msg);
 FuriStatus swire_usb_write_str(SwireUsb* self, FuriString* msg);

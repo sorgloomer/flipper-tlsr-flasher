@@ -9,23 +9,28 @@
 void handle_text_command(SwireApp* app, FuriString* cmd) {
     SwireUsb* usb = app->usb;
 
-    swire_usb_printf_line(usb, "# > %s", furi_string_get_cstr(cmd));
+    swire_usb_printf_ln(usb, "# > %s", furi_string_get_cstr(cmd));
     if(furi_string_equal(cmd, "ga7g4drb info") || furi_string_equal(cmd, "info")) {
-        swire_usb_printf_line(usb, "flitswire info response start");
-        swire_usb_printf_line(usb, "version=v%s", APP_VERSION);
-        swire_usb_printf_line(usb, "bitrate=TODO");
-        swire_usb_printf_line(usb, "trigger_delay=TODO");
-        swire_usb_printf_line(usb, "end");
+        swire_usb_printf_ln(usb, "flitswire info response start");
+        swire_usb_printf_ln(usb, "version=v%s", APP_VERSION);
+        swire_usb_printf_ln(usb, "bitrate=TODO");
+        swire_usb_printf_ln(usb, "trigger_delay=TODO");
+        swire_usb_printf_ln(usb, "end");
         return;
     }
 
     if(furi_string_equal(cmd, "ping")) {
-        swire_usb_printf_line(usb, "pong");
+        swire_usb_printf_ln(usb, "pong");
         return;
     }
 
-    if(furi_string_equal(cmd, "ga7g4drb close") || furi_string_equal(cmd, "close")) {
-        swire_usb_printf_line(usb, "ok");
+    if(furi_string_equal(cmd, "close")) {
+        swire_usb_printf_ln(usb, "ok");
+        furi_event_loop_stop(app->event_loop);
+        return;
+    }
+    if(furi_string_equal(cmd, "ga7g4drb close")) {
+        swire_usb_printf_ln(usb, "ga7g4drb closing");
         furi_event_loop_stop(app->event_loop);
         return;
     }
@@ -37,15 +42,7 @@ void handle_text_command(SwireApp* app, FuriString* cmd) {
             global_debug()->err = status;
             return;
         }
-        swire_usb_printf_line(usb, "send hex request received %d", furi_string_utf8_length(cmd));
-        return;
-    }
-
-    if(furi_string_equal(cmd, "chk")) {
-        FuriString* logs = app_get_logs(app);
-        furi_string_cat(logs, "end\n");
-        swire_usb_write_cstr(usb, furi_string_get_cstr(logs));
-        furi_string_reset(logs);
+        swire_usb_printf_ln(usb, "send hex request received %d", furi_string_utf8_length(cmd));
         return;
     }
 

@@ -63,12 +63,12 @@ void cmd_pgm_init(SwireApp* app, const char* cargs) {
         return;
     }
     if(cargs == NULL) {
-        app_log_append(app, "error no params");
+        app_usb_printf_ln(app, "error no params");
         return;
     }
     int matched = sscanf(cargs, "%ld %ld", &app->config->addrsize, &app->config->bitrate);
     if(matched != 2) {
-        app_log_append(app, "error params %d", matched);
+        app_usb_printf_ln(app, "error params %d", matched);
         return;
     }
 
@@ -86,13 +86,13 @@ void cmd_pgm_transaction_start(SwireApp* app, const char* cargs) {
         return;
     }
     if(cargs == NULL) {
-        swire_usb_printf_line(app->usb, "error no params");
+        swire_usb_printf_ln(app->usb, "error no params");
         return;
     }
-    int32_t addr, wr, slaveid;
-    int matched = sscanf(cargs, "%lx %lx %lx", &addr, &wr, &slaveid);
+    int32_t addr, wr, slave_id;
+    int matched = sscanf(cargs, "%lx %lx %lx", &addr, &wr, &slave_id);
     if(matched != 3) {
-        swire_usb_printf_line(app->usb, "error params %d");
+        swire_usb_printf_ln(app->usb, "error params %d");
         return;
     }
 
@@ -103,7 +103,7 @@ void cmd_pgm_transaction_start(SwireApp* app, const char* cargs) {
     }
 
     swire_bitbang_transaction_start(
-        app->swire, addr, wr ? SwireBitbangRwRead : SwireBitbangRwWrite, slaveid);
+        app->swire, addr, wr ? SwireBitbangRwRead : SwireBitbangRwWrite, slave_id);
     swire_bitbang_timer_join(app->swire);
 #if _OK_RESPONSES == 1
     swire_usb_writeline_cstr(app->usb, "ok");
@@ -136,13 +136,13 @@ FuriStatus cmd_pgm_bytes_write(SwireApp* app, const char* cargs) {
     }
     FuriStatus status;
     if(cargs == NULL) {
-        swire_usb_printf_line(app->usb, "error no params");
+        swire_usb_printf_ln(app->usb, "error no params");
         return FuriStatusErrorParameter;
     }
     int32_t bytecount;
     int matched = sscanf(cargs, "%lx", &bytecount);
     if(matched != 1) {
-        swire_usb_printf_line(app->usb, "error params matched %d", matched);
+        swire_usb_printf_ln(app->usb, "error params matched %d", matched);
         return FuriStatusErrorParameter;
     }
 
@@ -168,6 +168,8 @@ FuriStatus cmd_pgm_bytes_write(SwireApp* app, const char* cargs) {
 
     status = swire_usb_read(app->usb, buffer, bytecount);
     if(status & FuriFlagError) {
+        app->swire->error = status == FuriStatusErrorTimeout ? SwireBitbangErrorTimeout :
+                                                               SwireBitbangErrorUnknown;
         return status;
     }
 
@@ -189,13 +191,13 @@ FuriStatus cmd_pgm_bytes_read(SwireApp* app, const char* cargs) {
     }
     FuriStatus status;
     if(cargs == NULL) {
-        swire_usb_printf_line(app->usb, "error no params");
+        swire_usb_printf_ln(app->usb, "error no params");
         return FuriStatusErrorParameter;
     }
     int32_t bytecount;
     int matched = sscanf(cargs, "%lx", &bytecount);
     if(matched != 1) {
-        swire_usb_printf_line(app->usb, "error params matched %d", matched);
+        swire_usb_printf_ln(app->usb, "error params matched %d", matched);
         return FuriStatusErrorParameter;
     }
 
@@ -226,6 +228,7 @@ FuriStatus cmd_pgm_bytes_read(SwireApp* app, const char* cargs) {
 #if _OK_RESPONSES == 1
     swire_usb_writeline_cstr(app->usb, "ok");
 #endif
+    swire_usb_printf_ln(app->usb, "data %x", bytecount);
     status = swire_usb_write(app->usb, buffer, bytecount);
     if(status & FuriFlagError) {
         return status;
@@ -257,7 +260,7 @@ FuriStatus cmd_pgm_reset(SwireApp* app, const char* cargs) {
     furi_delay_ms(reset_duration_ms);
     furi_hal_gpio_write(pin_power, true);
     furi_delay_ms(reset_delay_ms);
-    swire_usb_printf_line(app->usb, "# reset %ld %ld", reset_delay_ms, reset_duration_ms);
+    swire_usb_printf_ln(app->usb, "# reset %ld %ld", reset_delay_ms, reset_duration_ms);
     swire_usb_writeline_cstr(app->usb, "ok");
     return FuriStatusOk;
 }
@@ -277,5 +280,6 @@ bool cmd_matches(FuriString* input, const char* cmd) {
 }
 const char* cmd_get_params(FuriString* cmd) {
     const char* ccmd = furi_string_get_cstr(cmd);
-    return strchr(ccmd, ' ');
+    const char* space = strchr(ccmd, ' ');
+    return space != NULL ? space + 1 : ccmd + strlen(ccmd);
 }

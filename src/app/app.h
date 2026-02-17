@@ -36,7 +36,6 @@ typedef struct SwireApp {
     FuriString* message;
     FuriString* message2;
     FuriString* command;
-    FuriString* logs;
     FuriString* tmp_str1;
     FuriString* tmp_str2;
 
@@ -82,8 +81,7 @@ void app_set_timer(
     FuriEventLoopTimerType type,
     SwireAppCallback callback);
 
-FuriString* app_get_logs(SwireApp* self);
-void app_log_append(SwireApp* self, const char* format, ...);
+void app_usb_printf_ln(SwireApp* self, const char* format, ...);
 
 extern const GpioPin* const pin_sws;
 extern const GpioPin* const pin_back;
