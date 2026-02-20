@@ -4,18 +4,13 @@
 
 #include "src/app/app.h"
 #include "src/swire/swire_bitbang.h"
+#include "src/commands/commands_pgm.h"
 
-#define _OK_RESPONSES 0
+#define _OK_RESPONSES           0
+#define _TRANSACTION_CHUNK_SIZE 16
 
-bool cmd_matches(FuriString* input, const char* cmd);
-const char* cmd_get_params(FuriString* cmd);
-void cmd_pgm_init(SwireApp* app, const char* params);
-void cmd_pgm_transaction_start(SwireApp* app, const char* params);
-void cmd_pgm_transaction_end(SwireApp* app, const char* params);
-FuriStatus cmd_pgm_bytes_read(SwireApp* app, const char* params);
-FuriStatus cmd_pgm_bytes_write(SwireApp* app, const char* params);
-FuriStatus cmd_pgm_reset(SwireApp* app, const char* params);
-
+static bool cmd_matches(FuriString* input, const char* cmd);
+static const char* cmd_get_params(FuriString* cmd);
 static SwireBitbang* cmd_swire_alloc(SwireApp* app);
 
 bool cmd_pgm(SwireApp* app, FuriString* cmd) {
@@ -45,6 +40,16 @@ bool cmd_pgm(SwireApp* app, FuriString* cmd) {
         cmd_pgm_reset(app, cargs);
         return true;
     }
+
+    if(cmd_matches(cmd, "trw")) {
+        cmd_pgm_transaction_write(app, cargs);
+        return true;
+    }
+    if(cmd_matches(cmd, "trr")) {
+        cmd_pgm_transaction_read(app, cargs);
+        return true;
+    }
+
     return false;
 }
 
@@ -108,6 +113,137 @@ void cmd_pgm_transaction_start(SwireApp* app, const char* cargs) {
 #if _OK_RESPONSES == 1
     swire_usb_writeline_cstr(app->usb, "ok");
 #endif
+}
+
+FuriStatus cmd_pgm_transaction_write(SwireApp* app, const char* cargs) {
+    FuriStatus status;
+    if(app->usb == NULL) {
+        FURI_LOG_E("swire", "cmd_pgm_transaction_start swire->usb not initialized");
+        return FuriStatusError;
+    }
+    if(cargs == NULL) {
+        swire_usb_printf_ln(app->usb, "error no params");
+        return FuriStatusErrorParameter;
+    }
+    int32_t addr, slave_id, bytecount;
+    int matched = sscanf(cargs, "%lx %lx %lx", &addr, &slave_id, &bytecount);
+    if(matched != 3) {
+        swire_usb_printf_ln(app->usb, "error params %d");
+        return FuriStatusErrorParameter;
+    }
+
+    if(bytecount < 0 || bytecount > 1024) {
+        swire_usb_printf_ln(app->usb, "error params bytecount");
+        return FuriStatusErrorParameter;
+    }
+
+    if(app->swire == NULL) {
+        swire_usb_writeline_cstr(app->usb, "error swire not initialized");
+        FURI_LOG_E("swire", "cmd_pgm_transaction_start swire->usb not initialized");
+        return FuriStatusError;
+    }
+
+    swire_bitbang_transaction_start(app->swire, addr, SwireBitbangRwWrite, slave_id);
+
+    uint8_t buffer[_TRANSACTION_CHUNK_SIZE];
+    while(bytecount > 0) {
+        int32_t chunk = MIN(bytecount, _TRANSACTION_CHUNK_SIZE);
+        status = swire_usb_read(app->usb, (uint8_t*)&buffer, chunk);
+        if(status != FuriStatusOk) {
+            FURI_LOG_E(
+                "swire",
+                "error: could not read from usb, err: %lx left: %ld",
+                (uint32_t)status,
+                bytecount);
+            swire_usb_printf_ln(
+                app->usb,
+                "error: could not read from usb, err: %lx left: %ld",
+                (uint32_t)status,
+                bytecount);
+            return status;
+        }
+        for(int i = 0; i < chunk; i++) {
+            swire_bitbang_byte_write(app->swire, buffer[i]);
+        }
+        bytecount -= chunk;
+    }
+    swire_bitbang_transaction_end(app->swire);
+
+    swire_bitbang_timer_join(app->swire);
+    swire_usb_writeline_cstr(app->usb, "ok");
+    return FuriStatusOk;
+}
+
+FuriStatus cmd_pgm_transaction_read(SwireApp* app, const char* cargs) {
+    FuriStatus status;
+    if(app->usb == NULL) {
+        FURI_LOG_E("swire", "cmd_pgm_transaction_start swire->usb not initialized");
+        return FuriStatusError;
+    }
+    if(cargs == NULL) {
+        swire_usb_printf_ln(app->usb, "error no params");
+        return FuriStatusErrorParameter;
+    }
+    int32_t addr, slave_id, bytecount;
+    int matched = sscanf(cargs, "%lx %lx %lx", &addr, &slave_id, &bytecount);
+    if(matched != 3) {
+        swire_usb_printf_ln(app->usb, "error params %d");
+        return FuriStatusErrorParameter;
+    }
+
+    if(bytecount < 0 || bytecount > 1024) {
+        swire_usb_printf_ln(app->usb, "error params bytecount");
+        return FuriStatusErrorParameter;
+    }
+
+    if(app->swire == NULL) {
+        swire_usb_writeline_cstr(app->usb, "error swire not initialized");
+        FURI_LOG_E("swire", "cmd_pgm_transaction_start swire->usb not initialized");
+        return FuriStatusError;
+    }
+
+    swire_bitbang_transaction_start(app->swire, addr, SwireBitbangRwRead, slave_id);
+
+    uint8_t buffer[_TRANSACTION_CHUNK_SIZE];
+    bool had_read_error = false;
+    int32_t err_left;
+    int32_t byte = 0xff;
+    swire_usb_printf_ln(app->usb, "data %lx", (int32_t)bytecount);
+    while(bytecount > 0) {
+        int32_t chunk = MIN(bytecount, _TRANSACTION_CHUNK_SIZE);
+        for(int i = 0; i < chunk; i++) {
+            if(!had_read_error) byte = swire_bitbang_byte_read(app->swire);
+            if(byte < 0) {
+                err_left = bytecount;
+                had_read_error = true;
+                byte &= 0xff;
+            }
+            buffer[i] = byte;
+        }
+        status = swire_usb_write(app->usb, (uint8_t*)buffer, chunk);
+        if(status != FuriStatusOk) {
+            FURI_LOG_E(
+                "swire",
+                "error: could not write to usb, err: %lx left: %ld",
+                (uint32_t)status,
+                bytecount);
+            swire_usb_printf_ln(
+                app->usb, "error: could not write to usb, err: %lx left: %ld", status, bytecount);
+            return status;
+        }
+        bytecount -= chunk;
+    }
+    swire_bitbang_transaction_end(app->swire);
+
+    swire_bitbang_timer_join(app->swire);
+
+    if(had_read_error) {
+        swire_usb_printf_ln(app->usb, "error: could not read from swire, left: %ld", err_left);
+        return FuriStatusError;
+    } else {
+        swire_usb_writeline_cstr(app->usb, "ok");
+        return FuriStatusOk;
+    }
 }
 
 void cmd_pgm_transaction_end(SwireApp* app, const char* cargs) {
@@ -228,7 +364,7 @@ FuriStatus cmd_pgm_bytes_read(SwireApp* app, const char* cargs) {
 #if _OK_RESPONSES == 1
     swire_usb_writeline_cstr(app->usb, "ok");
 #endif
-    swire_usb_printf_ln(app->usb, "data %x", bytecount);
+    swire_usb_printf_ln(app->usb, "data %lx", (int32_t)bytecount);
     status = swire_usb_write(app->usb, buffer, bytecount);
     if(status & FuriFlagError) {
         return status;
