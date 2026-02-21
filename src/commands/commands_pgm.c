@@ -299,24 +299,25 @@ FuriStatus cmd_pgm_bytes_write(SwireApp* app, const char* cargs) {
         return FuriStatusErrorParameter;
     }
 
-    uint8_t* buffer = malloc(bytecount);
-    furi_check(buffer);
+    uint8_t buffer[_TRANSACTION_CHUNK_SIZE];
+    while(bytecount > 0) {
+        int32_t chunksize = MIN(_TRANSACTION_CHUNK_SIZE, bytecount);
+        status = swire_usb_read(app->usb, buffer, chunksize);
+        if(status & FuriFlagError) {
+            app->swire->error = status == FuriStatusErrorTimeout ? SwireBitbangErrorTimeout :
+                                                                   SwireBitbangErrorUnknown;
+            return status;
+        }
 
-    status = swire_usb_read(app->usb, buffer, bytecount);
-    if(status & FuriFlagError) {
-        app->swire->error = status == FuriStatusErrorTimeout ? SwireBitbangErrorTimeout :
-                                                               SwireBitbangErrorUnknown;
-        return status;
-    }
-
-    for(int i = 0; i < bytecount; i++) {
-        swire_bitbang_byte_write(app->swire, buffer[i]);
+        for(int i = 0; i < chunksize; i++) {
+            swire_bitbang_byte_write(app->swire, buffer[i]);
+        }
+        bytecount -= chunksize;
     }
     swire_bitbang_timer_join(app->swire);
 #if _OK_RESPONSES == 1
     swire_usb_writeline_cstr(app->usb, "ok");
 #endif
-    free(buffer);
     return FuriStatusOk;
 }
 

@@ -75,6 +75,8 @@ def erase(args):
                 *device.flash.blk_addr(args.erase & (TLSR_FLASH_SECTOR_SIZE - 1)),
             ]
         )
+        ctrl = device.swire.transaction_read(REG_SPI_CTRL, 1)
+        print(f"[i] REG_SPI_CTRL {ctrl}")
         device.flash.wait_ready()
 
 
@@ -262,9 +264,9 @@ class TlsrFlash:
 
     def mspi_set_cs(self, value):
         if self.cs_enabled.set(value):
-            self.mspi_set_cs_force(value)
+            self._mspi_set_cs_force(value)
 
-    def mspi_set_cs_force(self, value):
+    def _mspi_set_cs_force(self, value):
         # Chip Select
         print(f"[d] set mspi chip select {value}")
         self.mspi_send_control([b"\x01", b"\x00"][value])  # MSPI Control disable CS
@@ -281,7 +283,7 @@ class TlsrFlash:
         with ExitStack() as stack:
             stack.enter_context(self.with_cs())
             stack.enter_context(self.cpu.with_fifo())
-            print(f"[d] mspi_send_data {data!r}")
+            print(f"[d] flash.mspi_send_data({data!r})")
             self.swire.transaction_write(REG_SPI_DATA, data)
 
     def read(self, length):
@@ -386,7 +388,7 @@ class Swire:
 
     def check_programmer(self):
         self.consume_until_timeout()
-        self.serial.write(b"ga7g4drb info\n")
+        self.write_raw_cmd(b"ga7g4drb info\n")
         line = self.readline()
         if (line + " ").startswith("swire_demo welcome "):
             line = self.readline()
@@ -398,7 +400,10 @@ class Swire:
     def write_raw_cmd(self, data):
         if isinstance(data, str):
             data = data.encode("utf-8")
-        self.serial.write(data)
+        written = self.serial.write(data)
+        # print(f"[d] Writtten {written}/{len(data)}")
+        if len(data) != written:
+            raise Exception(f"Write error {written}/{len(data)}")
 
     def transaction_write(self, addr, data, slave_id=None):
         if slave_id is None:

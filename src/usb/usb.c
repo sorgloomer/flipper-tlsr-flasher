@@ -396,27 +396,25 @@ static int32_t
         }
     }
 
-    uint32_t read_iteration_count = 0;
     while(buffer_size > 0) {
-        FuriStatus status = furi_event_flag_wait(
-            self->event_flag_rx, SwUsbRxEventRxAvailable, FuriFlagWaitAny, self->timeout_ms);
-        if(status & FuriFlagError) {
-            global_debug()->rx_trace = (int32_t)(buffer - original_buffer) * 10000 + 3;
-            return status;
-        }
-        int32_t received = furi_hal_cdc_receive(
-            self->vcp_ch, buffer, MIN(buffer_size, (uint32_t)USB_CDC_PKT_LEN));
-        if(received < 0) {
-            global_debug()->rx_trace = 4;
-            return FuriStatusError;
-        }
-        if(received == 0 && read_iteration_count > 2) {
-            // during the first iteration, the event might have been previously
-            // set by leftovers instead of interrupt, so it is expected to receive
-            // not bytes. subsequent reads however should return bytes. Return an
-            // error to avoid a potential infinite loop
-            global_debug()->rx_trace = 5;
-            return FuriStatusError;
+        uint32_t chunksize = MIN(buffer_size, (uint32_t)USB_CDC_PKT_LEN);
+        int32_t received = furi_hal_cdc_receive(self->vcp_ch, buffer, chunksize);
+        if(received <= 0) {
+            if(received < 0) {
+                global_debug()->rx_trace = 4;
+                return FuriStatusError;
+            }
+            FuriStatus status = furi_event_flag_wait(
+                self->event_flag_rx, SwUsbRxEventRxAvailable, FuriFlagWaitAny, self->timeout_ms);
+            if(status & FuriFlagError) {
+                global_debug()->rx_trace = (int32_t)(buffer - original_buffer) * 10000 + 3;
+                return status;
+            }
+            received = furi_hal_cdc_receive(self->vcp_ch, buffer, chunksize);
+            if(received <= 0) {
+                global_debug()->rx_trace = 5;
+                return FuriStatusError;
+            }
         }
         buffer += received;
         buffer_size -= received;
@@ -437,8 +435,6 @@ static int32_t
                 goto exit_normal;
             }
         }
-
-        read_iteration_count++;
     }
 
     global_debug()->rx_trace = 8;
@@ -446,7 +442,6 @@ static int32_t
 exit_normal:
     return buffer - original_buffer;
 exit_with_leftovers:
-    furi_event_flag_set(self->event_flag_rx, SwUsbRxEventRxAvailable);
     return buffer - original_buffer;
 }
 
