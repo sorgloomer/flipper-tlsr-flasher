@@ -10,6 +10,7 @@ from contextlib import ExitStack
 
 SW_MAX_IMAGE_LEN = 512 * 1024
 SW_CHUNK_SIZE = 256
+TLSR_FLASH_SECTOR_SIZE = 4096
 TLSR_FLASH_CMD_INITIATE_READ = 0x00
 TLSR_FLASH_CMD_WRITE = 0x02
 TLSR_FLASH_CMD_READ = 0x03
@@ -23,6 +24,10 @@ TLSR_FLASH_CMD_POWER_DOWN = 0xB9
 TLSR_FLASH_CMD_ERASE_BLOCK = 0xD8
 
 
+REG_SPI_DATA = 0x000C
+REG_SPI_CTRL = 0x000D
+
+
 def main(args=None):
     if args is None:
         args = build_argparse().parse_args()
@@ -31,8 +36,10 @@ def main(args=None):
         redeploy_fap(args)
     if args.dump:
         dump(args)
-    if args.flash:
+    if args.flash is not None:
         flash(args)
+    if args.erase is not None:
+        erase(args)
 
 
 def build_argparse():
@@ -42,12 +49,33 @@ def build_argparse():
     parser.add_argument("--short", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--out", type=str, default=None)
     parser.add_argument("--flash", type=str, default=None)
+    parser.add_argument("--erase", type=int, default=None)
     parser.add_argument("--length", type=int, default=0)
     parser.add_argument("--addr", type=int, default=0)
     parser.add_argument("--bitrate", type=int, default=75000)
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--reset-duration", type=int, default=500)
     return parser
+
+
+def erase(args):
+    flash_length = args.length
+    if not flash_length:
+        flash_length = SW_MAX_IMAGE_LEN
+    meter = BandwidthCounter()
+    with ExitStack() as stack:
+        device = stack.enter_context(TlsrDevice(args))
+
+        device.with_common_setup(stack)
+
+        device.flash.mspi_send_data(
+            [
+                TLSR_FLASH_CMD_WRITE_ENABLE,
+                TLSR_FLASH_CMD_ERASE_SECTOR,
+                *device.flash.blk_addr(args.erase & (TLSR_FLASH_SECTOR_SIZE - 1)),
+            ]
+        )
+        device.flash.wait_ready()
 
 
 def flash(args):
@@ -57,19 +85,13 @@ def flash(args):
     meter = BandwidthCounter()
     with ExitStack() as stack:
         device = stack.enter_context(TlsrDevice(args))
-        device.swire.check_programmer()
 
-        device.swire.init(args.bitrate)
-        device.reset()
+        device.with_common_setup(stack)
 
-        device.cpu.stop()
-        device.swire.transaction_write(0x00B2, b"\x7f")  # b0-b4 SWIRE
-        device.do_sanity_check()
-
-        stack.enter_context(device.cpu.with_transaction_mode(UndefinedState))
-        stack.enter_context(device.cpu.with_cs(UndefinedState))
         device.flash.mspi_send_data(TLSR_FLASH_CMD_WRITE_ENABLE)
         device.flash.mspi_init_write(args.addr)
+        # device.flash.mspi_start_auto_read()  # TODO: maybe not?
+        # device.flash.mspi_send_data(TLSR_FLASH_CMD_INITIATE_READ)
 
         flash_length = min(flash_length, os.path.getsize(args.flash))
         f = open(args.flash, "rb")
@@ -93,17 +115,8 @@ def dump(args):
     meter = BandwidthCounter()
     with ExitStack() as stack:
         device = stack.enter_context(TlsrDevice(args))
-        device.swire.check_programmer()
 
-        device.swire.init(args.bitrate)
-        device.reset()
-
-        device.cpu.stop()
-        device.swire.transaction_write(0x00B2, b"\x7f")  # b0-b4 SWIRE
-        device.do_sanity_check()
-
-        stack.enter_context(device.cpu.with_transaction_mode(UndefinedState))
-        stack.enter_context(device.flash.with_cs())
+        device.with_common_setup(stack)
 
         device.flash.mspi_init_read(args.addr)
 
@@ -116,7 +129,6 @@ def dump(args):
             os.makedirs(".dumps", exist_ok=True)
             outfilepath = f".dumps/dump-{ts}.bin"
         f = stack.enter_context(open(outfilepath, "wb"))
-        stack.enter_context(device.cpu.with_fifo())
         meter.restart()
         for addr in range(0, dump_length, SW_CHUNK_SIZE):
             buf = device.flash.read(SW_CHUNK_SIZE)
@@ -183,16 +195,26 @@ class TlsrDevice(ClosingMixin):
 
     def do_sanity_check(self):
         self.swire.ping_sync()
+        self.swire.transaction_write(0x00B2, b"\x7f")  # b0-b4 SWIRE
         sanity_check = self.swire.transaction_read(0x00B2, 1)  # b0-b4 SWIRE
         print(f"[i] sanity_check: {sanity_check.hex()}")
         if sanity_check != b"\x7f":
             raise Exception(f"[E] sanity_check failed {sanity_check.hex()}")
 
+    def with_common_setup(self, stack):
+        self.swire.check_programmer()
+        self.swire.init(self.args.bitrate)
+        self.reset()
+        self.cpu.stop()
+        self.do_sanity_check()
+        stack.enter_context(self.cpu.with_transaction_mode(DontCare))
+        stack.enter_context(self.flash.with_cs(DontCare))
+
 
 class TlsrCpu:
     def __init__(self, swire):
         self.swire = swire
-        self.transaction_mode = MaybeUndefinedState("mem")
+        self.transaction_mode = MaybeDontCareState("mem")
 
     def stop(self):
         self.swire.transaction_write(0x0602, b"\x05")  # CPU Stop
@@ -235,7 +257,7 @@ class TlsrFlash:
     def __init__(self, swire, cpu):
         self.swire = swire
         self.cpu = cpu
-        self.cs_enabled = MaybeUndefinedState(False)
+        self.cs_enabled = MaybeDontCareState(False)
         self.flash_ready_timeout = 0.5
 
     def mspi_set_cs(self, value):
@@ -244,6 +266,7 @@ class TlsrFlash:
 
     def mspi_set_cs_force(self, value):
         # Chip Select
+        print(f"[d] set mspi chip select {value}")
         self.mspi_send_control([b"\x01", b"\x00"][value])  # MSPI Control disable CS
         self.cs_enabled.actual = value
 
@@ -251,30 +274,41 @@ class TlsrFlash:
         return TlsrFlashCsContext(self, cs)
 
     def mspi_send_control(self, data):
-        self.swire.transaction_write(0x000D, data)
+        print(f"[d] flash.mspi_send_control({data!r})")
+        self.swire.transaction_write(REG_SPI_CTRL, data)
 
     def mspi_send_data(self, data):
-        with self.with_cs():
-            self.swire.transaction_write(0x000C, data)
+        with ExitStack() as stack:
+            stack.enter_context(self.with_cs())
+            stack.enter_context(self.cpu.with_fifo())
+            print(f"[d] mspi_send_data {data!r}")
+            self.swire.transaction_write(REG_SPI_DATA, data)
 
     def read(self, length):
-        with self.with_cs():
-            return self.swire.transaction_read(0x000C, length)
+        with ExitStack() as stack:
+            stack.enter_context(self.with_cs())
+            stack.enter_context(self.cpu.with_fifo())
+            print(f"[d] flash.read({length!r})")
+            return self.swire.transaction_read(REG_SPI_DATA, length)
 
     def mspi_init_read(self, addr):
-        self.mspi_init_cmd_addr(TLSR_FLASH_CMD_READ, addr)
+        self.mspi_send_fcmd_addr(TLSR_FLASH_CMD_READ, addr)
 
     def mspi_init_write(self, addr):
-        self.mspi_init_cmd_addr(TLSR_FLASH_CMD_WRITE, addr)
+        self.mspi_send_fcmd_addr(TLSR_FLASH_CMD_WRITE, addr)
 
-    def mspi_init_cmd_addr(self, cmd, addr):
+    def mspi_send_fcmd_addr(self, cmd, addr):
         with self.cpu.with_fifo():
-            self.mspi_send_data([cmd, *bigendian(addr, 3)])
+            print(f"[d] flash.mspi_init_cmd_addr({cmd!r}, 0x{addr:x})")
+            self.mspi_send_data([cmd, *self.blk_addr(addr)])
         # TODO: why not fifo send it in one transaction? seems to be working
         # self.mspi_send_data(cmd)
         # self.mspi_send_data((addr >> 16) & 0xFF)
         # self.mspi_send_data((addr >> 8) & 0xFF)
         # self.mspi_send_data((addr >> 0) & 0xFF)
+
+    def blk_addr(self, addr):
+        return bigendian(addr, 3)
 
     def mspi_start_auto_read(self):
         # MSPI Data, 00 to drive MSPI Clock to initiate first read
@@ -282,11 +316,13 @@ class TlsrFlash:
         # 0a = FLD_MASTER_SPI_RD | FLD_MASTER_SPI_SDO
         FLD_MASTER_SPI_RD = 0x08  # read
         FLD_MASTER_SPI_SDO = 0x02  # auto
+        FLD_MASTER_SPI_BUSY = (0x10,)
+        FLD_SLAVE_SPI_BUSY = (0x40,)
         with ExitStack() as stack:
             stack.enter_context(self.cpu.with_transaction_mode("mem"))
             stack.enter_context(self.with_cs())
             self.swire.transaction_write(
-                0x000C,
+                REG_SPI_DATA,
                 [
                     TLSR_FLASH_CMD_INITIATE_READ,
                     FLD_MASTER_SPI_RD | FLD_MASTER_SPI_SDO,
@@ -294,9 +330,10 @@ class TlsrFlash:
             )  # MSPI read addr[1]
 
     def read_status(self):
-        self.mspi_send_data(TLSR_FLASH_CMD_READ_STATUS)
-        self.mspi_send_data(TLSR_FLASH_CMD_INITIATE_READ)
-        return self.read(1)[0]
+        with self.with_cs(True):
+            self.mspi_send_data(TLSR_FLASH_CMD_READ_STATUS)
+            self.mspi_send_data(TLSR_FLASH_CMD_INITIATE_READ)
+            return self.read(1)[0]
 
     def wait_ready(self, timeout=None):
         if timeout is None:
@@ -323,12 +360,10 @@ class TlsrFlashCsContext(ClosingMixin):
         self.flash = flash
         self.old_cs = self.flash.cs_enabled.desired
         self.new_cs = cs
-        if self.new_cs != self.old_cs:
-            self.flash.mspi_set_cs(self.new_cs)
+        self.flash.mspi_set_cs(self.new_cs)
 
     def close(self):
-        if self.new_cs != self.old_cs:
-            self.flash.mspi_set_cs(self.old_cs)
+        self.flash.mspi_set_cs(self.old_cs)
 
 
 class Swire:
@@ -489,25 +524,31 @@ def fl_open_serial(args):
 class BandwidthCounter:
     def __init__(self):
         self.window = 1
-        self.count_window = 0
-        self.count_total = 0
-        self.pivot = time.time() + self.window
+        self.restart()
 
     def restart(self):
         self.count_window = 0
         self.count_total = 0
-        self.pivot = time.time() + self.window
+        self.start = time.time()
+        self.pivot = self.start + self.window
+        self.first_print = True
 
     def add_batch(self, size):
         self.count_window += size
         self.count_total += size
         if time.time() > self.pivot:
             self.pivot += self.window
-            print(f"Read speed: {humanbytes(self.count_window / self.window)}/s")
+            if self.first_print:
+                self.first_print = False
+            print(f"[d] Read speed: {humanbytes(self.count_window / self.window)}/s")
             self.count_window = 0
 
     def humantotal(self):
         return humanbytes(self.count_total)
+
+    def print_report(self, msg):
+        span = time.time() - self.pivot
+        print(f"[i] {msg} {self.humantotal()} in {span:03f} s")
 
 
 def humanbytes(x):
@@ -528,28 +569,28 @@ def humanbytes(x):
     return f"{x / TB:.2f} TB"
 
 
-class MaybeUndefinedState:
+class MaybeDontCareState:
     def __init__(self, value):
         self.actual = value
         self.desired = value
 
     def set(self, value):
         self.desired = value
-        if value is UndefinedState or self.actual == value:
+        if value is DontCare or self.actual == value:
             return False
         self.actual = value
         return True
 
 
-class UndefinedStateType:
+class DontCareType:
     def __repr__(self):
-        return "UndefinedState"
+        return "DontCare"
 
     def __str__(self):
-        return "UndefinedState"
+        return "DontCare"
 
 
-UndefinedState = UndefinedStateType()
+DontCare = DontCareType()
 
 
 if __name__ == "__main__":
