@@ -397,23 +397,26 @@ static int32_t
     }
 
     while(buffer_size > 0) {
-        uint32_t chunksize = MIN(buffer_size, (uint32_t)USB_CDC_PKT_LEN);
-        int32_t received = furi_hal_cdc_receive(self->vcp_ch, buffer, chunksize);
-        if(received <= 0) {
+        uint32_t chunksize = MIN((uint32_t)buffer_size, (uint32_t)USB_CDC_PKT_LEN);
+        int32_t received = 0;
+        for(int receive_attempt = 0;; receive_attempt++) {
+            received = furi_hal_cdc_receive(self->vcp_ch, buffer, chunksize);
+            if(received > 0) {
+                break;
+            }
             if(received < 0) {
+                global_debug()->rx_trace = 3;
+                return FuriStatusError;
+            }
+            if(receive_attempt > 2) {
                 global_debug()->rx_trace = 4;
                 return FuriStatusError;
             }
             FuriStatus status = furi_event_flag_wait(
                 self->event_flag_rx, SwUsbRxEventRxAvailable, FuriFlagWaitAny, self->timeout_ms);
             if(status & FuriFlagError) {
-                global_debug()->rx_trace = (int32_t)(buffer - original_buffer) * 10000 + 3;
+                global_debug()->rx_trace = (int32_t)(buffer - original_buffer) * 10000 + 5;
                 return status;
-            }
-            received = furi_hal_cdc_receive(self->vcp_ch, buffer, chunksize);
-            if(received <= 0) {
-                global_debug()->rx_trace = 5;
-                return FuriStatusError;
             }
         }
         buffer += received;

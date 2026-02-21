@@ -5,6 +5,7 @@
 #include "src/app/app.h"
 #include "src/swire/swire_bitbang.h"
 #include "src/commands/commands_pgm.h"
+#include "src/utils/global_debug.h"
 
 #define _OK_RESPONSES           0
 #define _TRANSACTION_CHUNK_SIZE 16
@@ -152,14 +153,16 @@ FuriStatus cmd_pgm_transaction_write(SwireApp* app, const char* cargs) {
         if(status != FuriStatusOk) {
             FURI_LOG_E(
                 "swire",
-                "error: could not read from usb, err: %lx left: %ld",
+                "error: could not read from usb, err: %lx, left: %ld, rx_trace: %ld",
                 (uint32_t)status,
-                bytecount);
+                (uint32_t)bytecount,
+                (uint32_t)global_debug()->rx_trace);
             swire_usb_printf_ln(
                 app->usb,
-                "error: could not read from usb, err: %lx left: %ld",
+                "error: could not read from usb, err: %lx, left: %ld, rx_trace: %ld",
                 (uint32_t)status,
-                bytecount);
+                (uint32_t)bytecount,
+                (uint32_t)global_debug()->rx_trace);
             return status;
         }
         for(int i = 0; i < chunk; i++) {
