@@ -6,13 +6,21 @@ import serial
 import serial.tools.list_ports
 from subprocess import check_call as run
 import argparse
-
+from contextlib import ExitStack
 
 SW_MAX_IMAGE_LEN = 512 * 1024
 SW_CHUNK_SIZE = 256
+TLSR_FLASH_CMD_INITIATE_READ = 0x00
 TLSR_FLASH_CMD_WRITE = 0x02
 TLSR_FLASH_CMD_READ = 0x03
+TLSR_FLASH_CMD_WRITE_DISABLE = 0x04
+TLSR_FLASH_CMD_READ_STATUS = 0x05
 TLSR_FLASH_CMD_WRITE_ENABLE = 0x06
+TLSR_FLASH_CMD_ERASE_SECTOR = 0x20
+TLSR_FLASH_CMD_ERASE_CHIP = 0x60
+TLSR_FLASH_CMD_GET_JEDEC_ID = 0x9F
+TLSR_FLASH_CMD_POWER_DOWN = 0xB9
+TLSR_FLASH_CMD_ERASE_BLOCK = 0xD8
 
 
 def main(args=None):
@@ -32,106 +40,96 @@ def build_argparse():
     parser.add_argument("--fap", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--dump", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--short", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--out", type=str, default=None)
     parser.add_argument("--flash", type=str, default=None)
     parser.add_argument("--length", type=int, default=0)
     parser.add_argument("--addr", type=int, default=0)
     parser.add_argument("--bitrate", type=int, default=75000)
     parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--reset-duration", type=int, default=500)
     return parser
 
 
 def flash(args):
-    dump_length = args.length
-    if not dump_length:
-        dump_length = SW_MAX_IMAGE_LEN
-    with closing(Swire(args)) as swire:
-        swire.check_programmer()
+    flash_length = args.length
+    if not flash_length:
+        flash_length = SW_MAX_IMAGE_LEN
+    meter = BandwidthCounter()
+    with ExitStack() as stack:
+        device = stack.enter_context(TlsrDevice(args))
+        device.swire.check_programmer()
 
-        swire.write_raw_cmd(f"swire_init 3 {args.bitrate}\n")
-        swire.write_raw_cmd(f"reset 70 1000\n")
-        if swire.readline() != "ok":
-            raise Exception()
+        device.swire.init(args.bitrate)
+        device.reset()
 
-        swire.cmd_cpu_stop()
-        swire.cmd_write(0x00B2, b"\x7f")  # b0-b4 SWIRE
-        do_sanity_check(swire)
-        swire.cmd_mspi_set_cs_enable(True)
+        device.cpu.stop()
+        device.swire.transaction_write(0x00B2, b"\x7f")  # b0-b4 SWIRE
+        device.do_sanity_check()
 
-        swire.cmd_mspi_send_data(TLSR_FLASH_CMD_WRITE_ENABLE)
-        swire.cmd_mspi_init_write(args.addr)
-        swire.cmd_set_fifo_mode(True)
+        stack.enter_context(device.cpu.with_transaction_mode(UndefinedState))
+        stack.enter_context(device.cpu.with_cs(UndefinedState))
+        device.flash.mspi_send_data(TLSR_FLASH_CMD_WRITE_ENABLE)
+        device.flash.mspi_init_write(args.addr)
 
-        meter = BandwidthCounter()
-
-        dump_length = min(dump_length, os.path.getsize(args.flash))
-        with open(args.flash, "rb") as f:
-            addr = 0
-            while addr < dump_length:
-                chunksize = min(SW_CHUNK_SIZE, dump_length - addr)
-                buf = f.read(chunksize)
-                print(f"Writing {len(buf):x}/{chunksize:x}/{dump_length:x} to flash")
-                swire.cmd_mspi_send_data(buf)
-                addr += chunksize
-                meter.add_batch(len(buf))
-
-        swire.cmd_set_fifo_mode(False)
-        swire.cmd_mspi_set_cs_enable(False)
+        flash_length = min(flash_length, os.path.getsize(args.flash))
+        f = open(args.flash, "rb")
+        addr = 0
+        meter.restart()
+        while addr < flash_length:
+            chunksize = min(SW_CHUNK_SIZE, flash_length - addr)
+            buf = f.read(chunksize)
+            print(f"Writing {len(buf):x}/{chunksize:x}/{flash_length:x} to flash")
+            device.flash.mspi_send_data(buf)
+            device.flash.wait_ready()
+            addr += chunksize
+            meter.add_batch(len(buf))
+    print(f"[i] flashed {meter.humantotal()}")
 
 
 def dump(args):
     dump_length = args.length
     if not dump_length:
         dump_length = SW_MAX_IMAGE_LEN
-    with closing(Swire(args)) as swire:
-        swire.check_programmer()
+    meter = BandwidthCounter()
+    with ExitStack() as stack:
+        device = stack.enter_context(TlsrDevice(args))
+        device.swire.check_programmer()
 
-        swire.write_raw_cmd(f"swire_init 3 {args.bitrate}\n")
-        swire.write_raw_cmd(f"reset 70 1000\n")
-        if swire.readline() != "ok":
-            raise Exception()
+        device.swire.init(args.bitrate)
+        device.reset()
 
-        swire.cmd_cpu_stop()
-        swire.cmd_write(0x00B2, b"\x7f")  # b0-b4 SWIRE
-        do_sanity_check(swire)
+        device.cpu.stop()
+        device.swire.transaction_write(0x00B2, b"\x7f")  # b0-b4 SWIRE
+        device.do_sanity_check()
 
-        swire.cmd_mspi_set_cs_enable(True)
+        stack.enter_context(device.cpu.with_transaction_mode(UndefinedState))
+        stack.enter_context(device.flash.with_cs())
 
-        swire.cmd_mspi_init_read(args.addr)
+        device.flash.mspi_init_read(args.addr)
 
-        # MSPI Data, 00 to drive MSPI Clock to initiate first read
-        # MSPI Control, 0a to auto read mode
-        # 0a = FLD_MASTER_SPI_RD | FLD_MASTER_SPI_SDO
-        swire.cmd_write(0x000C, bytes.fromhex("000a"))  # MSPI read addr[1]
-
-        swire.cmd_set_fifo_mode(True)
+        device.flash.mspi_start_auto_read()
 
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        meter = BandwidthCounter()
-        os.makedirs(".dumps", exist_ok=True)
-        with open(f".dumps/dump-{ts}.bin", "wb") as f:
-            for addr in range(0, dump_length, SW_CHUNK_SIZE):
-                buf = swire.cmd_read(0x000C, SW_CHUNK_SIZE)
-                if swire.debug:
-                    for chunk in chunks(buf, 32):
-                        print(
-                            f"DUMP {addr:06x}: {chunk[0:16].hex()}  {chunk[16:32].hex()}"
-                        )
-                        addr += 32
-                if args.short and all(x == 0xFF for x in buf):
-                    break
-                f.write(buf)
-                meter.add_batch(len(buf))
+        if args.out:
+            outfilepath = args.out
+        else:
+            os.makedirs(".dumps", exist_ok=True)
+            outfilepath = f".dumps/dump-{ts}.bin"
+        f = stack.enter_context(open(outfilepath, "wb"))
+        stack.enter_context(device.cpu.with_fifo())
+        meter.restart()
+        for addr in range(0, dump_length, SW_CHUNK_SIZE):
+            buf = device.flash.read(SW_CHUNK_SIZE)
+            if device.swire.debug:
+                for chunk in chunks(buf, 32):
+                    print(f"DUMP {addr:06x}: {chunk[0:16].hex()}  {chunk[16:32].hex()}")
+                    addr += 32
+            if args.short and all(x == 0xFF for x in buf):
+                break
+            f.write(buf)
+            meter.add_batch(len(buf))
 
-        swire.cmd_set_fifo_mode(False)
-        swire.cmd_mspi_set_cs_enable(False)
-
-
-def do_sanity_check(swire):
-    swire.ping_sync()
-    sanity_check = swire.cmd_read(0x00B2, 1)  # b0-b4 SWIRE
-    print(f"sanity_check: {sanity_check.hex()}")
-    if sanity_check != b"\x7f":
-        raise Exception(f"[E] sanity_check failed {sanity_check.hex()}")
+    print(f"[i] dumped {meter.humantotal()}")
 
 
 def redeploy_fap(args):
@@ -151,6 +149,186 @@ def chunks(lst, n):
     """Yield successive n-sized chunks from lst."""
     for i in range(0, len(lst), n):
         yield lst[i : i + n]
+
+
+class ClosingMixin:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        if exc_type is not None or exc is not None:
+            raise exc
+
+
+class TlsrDevice(ClosingMixin):
+    def __init__(self, args, swire=None):
+        self.swire_owned = False
+        if swire is None:
+            swire = Swire(args)
+            self.swire_owned = True
+        self.args = args
+        self.swire = swire
+        self.cpu = TlsrCpu(self.swire)
+        self.flash = TlsrFlash(self.swire, self.cpu)
+
+    def close(self):
+        if self.swire_owned:
+            self.swire.close()
+
+    def reset(self):
+        self.swire.write_raw_cmd(f"reset 70 {self.args.reset_duration}\n")
+        if self.swire.readline() != "ok":
+            raise Exception()
+
+    def do_sanity_check(self):
+        self.swire.ping_sync()
+        sanity_check = self.swire.transaction_read(0x00B2, 1)  # b0-b4 SWIRE
+        print(f"[i] sanity_check: {sanity_check.hex()}")
+        if sanity_check != b"\x7f":
+            raise Exception(f"[E] sanity_check failed {sanity_check.hex()}")
+
+
+class TlsrCpu:
+    def __init__(self, swire):
+        self.swire = swire
+        self.transaction_mode = MaybeUndefinedState("mem")
+
+    def stop(self):
+        self.swire.transaction_write(0x0602, b"\x05")  # CPU Stop
+
+    def set_fifo_mode(self, value):
+        self.set_transaction_mode("fifo" if value else "mem")
+
+    def with_transaction_mode(self, mode):
+        return TlsrCpuTransactionModeContext(self, mode)
+
+    def with_fifo(self):
+        return TlsrCpuTransactionModeContext(self, "fifo")
+
+    def set_transaction_mode(self, mode):
+        mode_code = None
+        if mode == "fifo":
+            mode_code = 0x80
+        if mode == "mem":
+            mode_code = 0x00
+        if not self.transaction_mode.set(mode):
+            return
+        if mode_code is None:
+            raise Exception(f"Unhandled mode setting {mode!r}")
+        # swire mode, fifo, repeated reads from same address
+        self.swire.transaction_write(0x00B3, mode_code)
+
+
+class TlsrCpuTransactionModeContext(ClosingMixin):
+    def __init__(self, cpu, mode):
+        self.cpu = cpu
+        self.old_mode = cpu.transaction_mode.desired
+        self.new_mode = mode
+        self.cpu.set_transaction_mode(self.new_mode)
+
+    def close(self):
+        self.cpu.set_transaction_mode(self.old_mode)
+
+
+class TlsrFlash:
+    def __init__(self, swire, cpu):
+        self.swire = swire
+        self.cpu = cpu
+        self.cs_enabled = MaybeUndefinedState(False)
+        self.flash_ready_timeout = 0.5
+
+    def mspi_set_cs(self, value):
+        if self.cs_enabled.set(value):
+            self.mspi_set_cs_force(value)
+
+    def mspi_set_cs_force(self, value):
+        # Chip Select
+        self.mspi_send_control([b"\x01", b"\x00"][value])  # MSPI Control disable CS
+        self.cs_enabled.actual = value
+
+    def with_cs(self, cs=True):
+        return TlsrFlashCsContext(self, cs)
+
+    def mspi_send_control(self, data):
+        self.swire.transaction_write(0x000D, data)
+
+    def mspi_send_data(self, data):
+        with self.with_cs():
+            self.swire.transaction_write(0x000C, data)
+
+    def read(self, length):
+        with self.with_cs():
+            return self.swire.transaction_read(0x000C, length)
+
+    def mspi_init_read(self, addr):
+        self.mspi_init_cmd_addr(TLSR_FLASH_CMD_READ, addr)
+
+    def mspi_init_write(self, addr):
+        self.mspi_init_cmd_addr(TLSR_FLASH_CMD_WRITE, addr)
+
+    def mspi_init_cmd_addr(self, cmd, addr):
+        with self.cpu.with_fifo():
+            self.mspi_send_data([cmd, *bigendian(addr, 3)])
+        # TODO: why not fifo send it in one transaction? seems to be working
+        # self.mspi_send_data(cmd)
+        # self.mspi_send_data((addr >> 16) & 0xFF)
+        # self.mspi_send_data((addr >> 8) & 0xFF)
+        # self.mspi_send_data((addr >> 0) & 0xFF)
+
+    def mspi_start_auto_read(self):
+        # MSPI Data, 00 to drive MSPI Clock to initiate first read
+        # MSPI Control, 0a to auto read mode
+        # 0a = FLD_MASTER_SPI_RD | FLD_MASTER_SPI_SDO
+        FLD_MASTER_SPI_RD = 0x08  # read
+        FLD_MASTER_SPI_SDO = 0x02  # auto
+        with ExitStack() as stack:
+            stack.enter_context(self.cpu.with_transaction_mode("mem"))
+            stack.enter_context(self.with_cs())
+            self.swire.transaction_write(
+                0x000C,
+                [
+                    TLSR_FLASH_CMD_INITIATE_READ,
+                    FLD_MASTER_SPI_RD | FLD_MASTER_SPI_SDO,
+                ],
+            )  # MSPI read addr[1]
+
+    def read_status(self):
+        self.mspi_send_data(TLSR_FLASH_CMD_READ_STATUS)
+        self.mspi_send_data(TLSR_FLASH_CMD_INITIATE_READ)
+        return self.read(1)[0]
+
+    def wait_ready(self, timeout=None):
+        if timeout is None:
+            timeout = self.flash_ready_timeout
+        timeout_end = time.time() + timeout
+        status = None
+        quit_next = False
+        while not quit_next:
+            if time.time() > timeout_end:
+                quit_next = True
+            status = self.read_status()
+            if status == 0x00:
+                return
+        status_str = f"{status:02x}" if isinstance(status, int) else repr(status)
+        raise Exception(f"wait_flash_ready timeout, status: {status_str}")
+
+    def _assert_cs(self):
+        if not self.cs_enabled:
+            raise Exception("cs needs to be enabled")
+
+
+class TlsrFlashCsContext(ClosingMixin):
+    def __init__(self, flash, cs):
+        self.flash = flash
+        self.old_cs = self.flash.cs_enabled.desired
+        self.new_cs = cs
+        if self.new_cs != self.old_cs:
+            self.flash.mspi_set_cs(self.new_cs)
+
+    def close(self):
+        if self.new_cs != self.old_cs:
+            self.flash.mspi_set_cs(self.old_cs)
 
 
 class Swire:
@@ -187,11 +365,13 @@ class Swire:
             data = data.encode("utf-8")
         self.serial.write(data)
 
-    def cmd_write(self, addr, data, slave_id=None):
+    def transaction_write(self, addr, data, slave_id=None):
         if slave_id is None:
             slave_id = 0
         if isinstance(data, int):
-            data = bytes([data])
+            data = [data]
+        if isinstance(data, list):
+            data = bytes(data)
 
         self.write_raw_cmd(f"trw {addr:x} {slave_id:x} {len(data):x}\n")
         self.write_raw_cmd(data)
@@ -199,38 +379,7 @@ class Swire:
         if resp != "ok":
             raise Exception(resp)
 
-    def cmd_cpu_stop(self):
-        self.cmd_write(0x0602, b"\x05")  # CPU Stop
-
-    def cmd_set_fifo_mode(self, value):
-        # swire mode, fifo, repeated reads from same address
-        self.cmd_write(0x00B3, [b"\x00", b"\x80"][value])
-
-    def cmd_mspi_set_cs_enable(self, value):
-        # MSPI = Memory SPI
-        # CS = Chip Select
-        # MSPI Control, CS bit active low
-        self.cmd_mspi_send_control([b"\x01", b"\x00"][value])  # MSPI Control disable CS
-
-    def cmd_mspi_send_control(self, data):
-        self.cmd_write(0x000D, data)
-
-    def cmd_mspi_send_data(self, data):
-        self.cmd_write(0x000C, data)
-
-    def cmd_mspi_init_read(self, addr):
-        self.cmd_mspi_init_cmd_addr(TLSR_FLASH_CMD_READ, addr)
-
-    def cmd_mspi_init_write(self, addr):
-        self.cmd_mspi_init_cmd_addr(TLSR_FLASH_CMD_WRITE, addr)
-
-    def cmd_mspi_init_cmd_addr(self, cmd, addr):
-        self.cmd_mspi_send_data(cmd)
-        self.cmd_mspi_send_data((addr >> 16) & 0xFF)
-        self.cmd_mspi_send_data((addr >> 8) & 0xFF)
-        self.cmd_mspi_send_data((addr >> 0) & 0xFF)
-
-    def cmd_read(self, addr, readlen, slave_id=None, timeout=None):
+    def transaction_read(self, addr, readlen, slave_id=None, timeout=None):
         if slave_id is None:
             slave_id = 0
         if timeout is None:
@@ -244,8 +393,11 @@ class Swire:
             raise Exception("could not read enough bytes")
         status = self.readline()
         if status != "ok":
-            raise Exception(status)
+            raise Exception(f"error result from transaction_read: {status}")
         return result
+
+    def init(self, bitrate):
+        self.write_raw_cmd(f"swire_init 3 {bitrate}\n")
 
     def readline(self, timeout=None, echo=None):
         if timeout is None:
@@ -314,16 +466,22 @@ class Swire:
                 self.data_queue.put(buffer)
 
 
+def bigendian(number, bytecount):
+    return bytes(
+        ((number >> ((bytecount - i - 1) * 8)) & 0xFF) for i in range(bytecount)
+    )
+
+
 def fl_open_serial(args):
-    print(f"I Listing COM ports")
+    print(f"[d] Listing COM ports")
     ports = serial.tools.list_ports.comports()
     flipper_port = None
     for port, desc, hwid in sorted(ports):
-        print(f"  - {port}: {desc} [{hwid}]")
+        print(f"     - {port}: {desc} [{hwid}]")
         if "FLIP_" in hwid:
             flipper_port = port
 
-    print(f"I opening {flipper_port}")
+    print(f"[d] opening {flipper_port}")
     flipper = serial.Serial(flipper_port, baudrate=args.baud, timeout=1)
     return flipper
 
@@ -331,19 +489,25 @@ def fl_open_serial(args):
 class BandwidthCounter:
     def __init__(self):
         self.window = 1
-        self.count = 0
+        self.count_window = 0
+        self.count_total = 0
         self.pivot = time.time() + self.window
 
-    def start(self):
-        self.count = 0
+    def restart(self):
+        self.count_window = 0
+        self.count_total = 0
         self.pivot = time.time() + self.window
 
     def add_batch(self, size):
-        self.count += size
+        self.count_window += size
+        self.count_total += size
         if time.time() > self.pivot:
             self.pivot += self.window
-            print(f"Read speed: {humanbytes(self.count / self.window)}/s")
-            self.count = 0
+            print(f"Read speed: {humanbytes(self.count_window / self.window)}/s")
+            self.count_window = 0
+
+    def humantotal(self):
+        return humanbytes(self.count_total)
 
 
 def humanbytes(x):
@@ -362,6 +526,30 @@ def humanbytes(x):
     if x < TB:
         return f"{x / GB:.2f} GB"
     return f"{x / TB:.2f} TB"
+
+
+class MaybeUndefinedState:
+    def __init__(self, value):
+        self.actual = value
+        self.desired = value
+
+    def set(self, value):
+        self.desired = value
+        if value is UndefinedState or self.actual == value:
+            return False
+        self.actual = value
+        return True
+
+
+class UndefinedStateType:
+    def __repr__(self):
+        return "UndefinedState"
+
+    def __str__(self):
+        return "UndefinedState"
+
+
+UndefinedState = UndefinedStateType()
 
 
 if __name__ == "__main__":
