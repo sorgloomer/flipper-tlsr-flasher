@@ -2,7 +2,7 @@
 
 #include <furi.h>
 #include <furi_hal.h>
-#include "swire_common.h"
+#include "swire_common.hpp"
 
 #define SWIRE_UART_TX_BUFFER_SIZE 8
 #define SWIRE_UART_RX_BUFFER_SIZE 8
@@ -17,7 +17,7 @@ typedef struct {
 } SwireUart;
 
 SwireUart* swire_uart_alloc(uint32_t baudrate) {
-    SwireUart* self = malloc(sizeof(SwireUart));
+    SwireUart* self = (SwireUart*)malloc(sizeof(SwireUart));
 
     self->read_delay_per_byte_us = 0;
     self->serial_handle = furi_hal_serial_control_acquire(FuriHalSerialIdUsart);
@@ -87,8 +87,8 @@ static void swire_uart_echo_on_irq_cb(
     void* context) {
     UNUSED(handle);
 
-    SwireUart* self = context;
-    self->rx_event |= event;
+    SwireUart* self = (SwireUart*)context;
+    self->rx_event = (FuriHalSerialRxEvent)(self->rx_event | event);
     if(event & FuriHalSerialRxEventData) {
         uint8_t data = furi_hal_serial_async_rx(handle);
         size_t idx = self->rx_buffer_idx;
@@ -121,7 +121,7 @@ void swire_uart_read_bytes(SwireUart* self, uint8_t* buffer, size_t buffer_size)
 
     for(size_t i = 0; i < buffer_size; i++) {
         furi_delay_us(delay_us);
-        self->rx_event = 0;
+        self->rx_event = (FuriHalSerialRxEvent)0;
         self->rx_buffer_idx = 0;
         furi_hal_serial_tx(handle, tx_buffer, 1);
         while(self->rx_buffer_idx < 5 && (self->rx_event & ~FuriHalSerialRxEventData) == 0)

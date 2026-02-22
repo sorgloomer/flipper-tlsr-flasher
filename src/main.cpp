@@ -1,3 +1,4 @@
+#include <memory>
 #include <furi.h>
 
 #include "src/main.hpp"
@@ -18,11 +19,12 @@ void swire_main() {
     global_debug_init();
     swire_bitbang_global_init();
 
-    SwireApp* app = app_alloc();
-    global_app = app;
-    app_run(app);
-    global_app = NULL;
-    app_free(app);
+    {
+        auto app = std::make_unique<SwireApp>();
+        global_app = app.get();
+        app->run();
+        global_app = nullptr;
+    }
 
     furi_hal_gpio_init_simple(pin_sws, GpioModeAnalog);
     light_rgb_set(0);

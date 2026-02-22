@@ -4,7 +4,7 @@
 
 #define SWIRE_INLINE __attribute__((always_inline)) inline
 
-typedef struct IoPins {
+struct IoPins {
     const GpioPin* in;
     const GpioPin* out;
-} IoPins;
+};

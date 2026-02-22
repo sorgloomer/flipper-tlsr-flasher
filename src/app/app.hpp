@@ -22,7 +22,8 @@ typedef enum {
     SwireAppViewVarItemList,
 } SwireAppView;
 
-typedef struct SwireApp {
+class SwireApp {
+public:
     SwireUsb* usb;
     SwireBitbang* swire;
 
@@ -50,24 +51,24 @@ typedef struct SwireApp {
     SceneManager* scene_manager;
     Widget* widget;
     DialogEx* dialog;
-} SwireApp;
 
-typedef enum {
+    SwireApp();
+    ~SwireApp();
+    void run();
+};
+
+enum BlinkerState {
     BlinkerStateOff,
     BlinkerStateIdle,
     BlinkerStateConnected,
     BlinkerStateTimeout,
     BlinkerStateError,
     BlinkerStateSolidWhite,
-} BlinkerState;
+};
 
 typedef void (*SwireAppCallback)(SwireApp* app);
 
 void global_stop_loop();
-
-SwireApp* app_alloc();
-void app_free(SwireApp* self);
-void app_run(SwireApp* self);
 
 void app_set_usb_enabled(SwireApp* self, bool value);
 

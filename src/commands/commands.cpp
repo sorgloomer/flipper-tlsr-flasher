@@ -23,7 +23,7 @@ void handle_text_command(SwireApp* app, std::string& cmd) {
         return;
     }
 
-    if(cmd == "close") {
+    if(cmd == "close" || cmd == "exit") {
         swire_usb_printf_ln(usb, "ok");
         furi_event_loop_stop(app->event_loop);
         return;

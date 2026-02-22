@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <furi.h>
 
-typedef struct {
+struct GlobalDebugInfo {
     int32_t irq_tx;
     int32_t irq_rx;
     int32_t irq_rx_ts;
@@ -24,7 +24,8 @@ typedef struct {
     int32_t rx_trace;
     std::vector<std::string> logs;
     uint32_t log_capacity;
-} GlobalDebugInfo;
+};
+
 GlobalDebugInfo* global_debug();
 void global_debug_init();
 void global_debug_deinit();
