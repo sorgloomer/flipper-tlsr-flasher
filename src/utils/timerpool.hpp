@@ -1,16 +1,36 @@
 #pragma once
 #include <furi.h>
+#include "src/furi/delay.hpp"
 
-typedef struct TimerPool TimerPool;
-typedef struct TimerListItem TimerHandle;
+class TimerPool {
+    struct TimerHandle* head;
+    FuriEventLoop* event_loop;
 
-FuriEventLoopTimer* timerpool_get_timer(TimerHandle* item);
-void timerpool_cancel(TimerHandle* item);
-TimerPool* timerpool_alloc(FuriEventLoop* event_loop);
-void timerpool_free(TimerPool* pool);
-void timerpool_submit(
-    TimerPool* pool,
-    uint32_t interval_ms,
-    FuriEventLoopTimerType type,
-    FuriEventLoopTimerCallback callback,
-    void* context);
+public:
+    TimerPool(FuriEventLoop* event_loop);
+    ~TimerPool();
+
+    void submit(
+        furi::u32ms timeout,
+        FuriEventLoopTimerType type,
+        FuriEventLoopTimerCallback callback,
+        void* context);
+
+    FuriEventLoop* get_raw_event_loop() {
+        return event_loop;
+    }
+};
+
+struct TimerHandle {
+    struct TimerHandle* prev;
+    struct TimerHandle* next;
+    TimerPool* pool;
+    FuriEventLoopTimerType type;
+    FuriEventLoopTimer* timer;
+    FuriEventLoopTimerCallback callback;
+    void* context;
+
+public:
+    FuriEventLoopTimer* get_raw_timer();
+    void cancel();
+};

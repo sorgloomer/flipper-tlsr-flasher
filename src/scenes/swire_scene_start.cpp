@@ -11,6 +11,8 @@
 #include "src/app/bitrate_options.hpp"
 #include "src/commands/commands_bitbang.hpp"
 
+using namespace std::chrono_literals;
+
 #define _BITRATE_STR_BUFFER_SIZE 16
 
 enum SwireUsbEnabled {
@@ -145,11 +147,11 @@ bool swire_scene_start_on_event(void* context, SceneManagerEvent event) {
         break;
     case SwireGuiEventUsbEnabledOn:
         app_set_usb_enabled(app, true);
-        app_set_blinker(app, 0x00ffff, 1000);
+        app_set_blinker(app, 0x00ffff, 1000ms);
         break;
     case SwireGuiEventUsbEnabledbOff:
         app_set_usb_enabled(app, false);
-        app_set_blinker(app, 0x000080, 2000);
+        app_set_blinker(app, 0x000080, 2000ms);
         break;
     }
     return true;

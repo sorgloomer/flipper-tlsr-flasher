@@ -1,95 +1,87 @@
 #include <furi.h>
 #include "./timerpool.hpp"
-
-struct TimerPool {
-    FuriEventLoop* event_loop;
-    struct TimerListItem* head;
-};
-
-struct TimerListItem {
-    struct TimerListItem* prev;
-    struct TimerListItem* next;
-    TimerPool* pool;
-    FuriEventLoopTimerType type;
-    FuriEventLoopTimer* timer;
-    FuriEventLoopTimerCallback callback;
-    void* context;
-};
+#include "src/furi/duration.hpp"
 
 static void timerpool_handle_timer(void* context);
+static void timerhandle_cancel_and_delete(void* context);
 
-TimerPool* timerpool_alloc(FuriEventLoop* event_loop) {
-    TimerPool* pool = (TimerPool*)malloc(sizeof(TimerPool));
-    furi_check(pool);
-    pool->event_loop = event_loop;
-    TimerHandle* item = (TimerHandle*)malloc(sizeof(TimerHandle));
+TimerPool::TimerPool(FuriEventLoop* event_loop) {
+    this->event_loop = event_loop;
+    TimerHandle* item = new TimerHandle();
     furi_check(item);
-    item->timer = NULL;
+    item->timer = nullptr;
     item->next = item;
     item->prev = item;
-    pool->head = item;
-    return pool;
+    this->head = item;
 }
 
-void timerpool_free(TimerPool* pool) {
-    if(pool == NULL) return;
-    TimerHandle* item = pool->head->next;
+TimerPool::~TimerPool() {
+    TimerHandle* item = this->head->next;
     int i = 0;
-    while(item != pool->head) {
+    while(item != this->head) {
         i++;
         TimerHandle* next = item->next;
         furi_event_loop_timer_free(item->timer);
-        free(item);
+        delete item;
         item = next;
     }
     FURI_LOG_I("swire", "timerpool_free items %d", i);
-    free(pool->head);
-    free(pool);
+    delete this->head;
 }
 
-void timerpool_submit(
-    TimerPool* pool,
-    uint32_t timeout_ms,
+void TimerPool::submit(
+    furi::u32ms timeout,
     FuriEventLoopTimerType type,
     FuriEventLoopTimerCallback callback,
     void* context) {
-    TimerHandle* item = (TimerHandle*)malloc(sizeof(TimerHandle));
+    TimerHandle* item = new TimerHandle();
     furi_check(item);
-    item->pool = pool;
+    item->pool = this;
     item->type = type;
     item->callback = callback;
     item->context = context;
     item->timer =
-        furi_event_loop_timer_alloc(pool->event_loop, timerpool_handle_timer, type, item);
+        furi_event_loop_timer_alloc(this->event_loop, timerpool_handle_timer, type, item);
 
-    item->prev = pool->head->prev;
-    item->next = pool->head;
+    item->prev = this->head->prev;
+    item->next = this->head;
     item->next->prev = item;
     item->prev->next = item;
-    furi_event_loop_timer_start(item->timer, timeout_ms);
+    furi_event_loop_timer_start(item->timer, timeout.count());
 }
 
-FuriEventLoopTimer* timerpool_get_timer(TimerHandle* item) {
-    return item->timer;
+FuriEventLoopTimer* TimerHandle::get_raw_timer() {
+    return this->timer;
 }
 
-void timerpool_cancel(TimerHandle* item) {
-    if(item == NULL) return;
-    TimerHandle* prev = item->prev;
-    TimerHandle* next = item->next;
+void TimerHandle::cancel() {
+    TimerHandle* prev = this->prev;
+    TimerHandle* next = this->next;
     prev->next = next;
     next->prev = prev;
-    furi_event_loop_timer_free(item->timer);
-    free(item);
+    furi_event_loop_timer_free(this->timer);
+    this->timer = nullptr;
+    this->callback = nullptr;
+    this->context = nullptr;
+    this->prev = nullptr;
+    this->next = nullptr;
 }
 
 static void timerpool_handle_timer(void* context) {
     TimerHandle* item = (TimerHandle*)context;
-    item->callback(item->context);
+    if(item->callback != nullptr) {
+        item->callback(item->context);
+    }
     if(item->type == FuriEventLoopTimerTypeOnce) {
         furi_event_loop_pend_callback( // TODO check if delay is needed
-            item->pool->event_loop,
-            (FuriEventLoopPendingCallback)timerpool_cancel,
+            item->pool->get_raw_event_loop(),
+            timerhandle_cancel_and_delete,
             item);
     }
+}
+
+static void timerhandle_cancel_and_delete(void* context) {
+    auto handle = static_cast<TimerHandle*>(context);
+    handle->cancel();
+    delete handle;
 }

@@ -3,10 +3,10 @@
 
 namespace furi {
 
-void delay_ms(milli duration) {
+void delay_ms(u32ms duration) {
     furi_delay_ms(duration.count());
 }
-void delay_us(micro duration) {
+void delay_us(u32us duration) {
     furi_delay_us(duration.count());
 }
 

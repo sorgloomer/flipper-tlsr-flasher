@@ -27,7 +27,7 @@ public:
     TFlags get() {
         return furi_event_flag_get(ptr);
     }
-    TFlags wait(TFlags flags, FuriFlag options, milli timeout) {
+    TFlags wait(TFlags flags, FuriFlag options, milli32 timeout) {
         return furi_event_flag_wait(ptr, flags, options, timeout);
     }
 };
