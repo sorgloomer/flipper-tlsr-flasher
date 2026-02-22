@@ -47,3 +47,5 @@ void swire_usb_pull_debug_data(SwireUsb* self);
 FuriEventFlag* swire_usb_get_event_flag_rx(SwireUsb* self);
 FuriEventFlag* swire_usb_get_event_flag_tx(SwireUsb* self);
 // FuriMessageQueue* swire_usb_get_queue(SwireUsb* self);
+
+uint32_t swire_usb_get_debug_rx(SwireUsb* self);

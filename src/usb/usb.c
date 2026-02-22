@@ -78,9 +78,12 @@ struct SwireUsb {
     uint8_t* buffer_tx_sending;
     uint8_t* buffer_tx_building;
     uint32_t buffer_rx_size;
+    uint32_t buffer_rx_start;
     uint8_t buffer_rx[USB_CDC_RX_BUF_SIZE];
     uint8_t buffer_tx_1[USB_CDC_TX_BUF_SIZE];
     uint8_t buffer_tx_2[USB_CDC_TX_BUF_SIZE];
+
+    uint32_t debug_rx;
 };
 
 typedef enum {
@@ -154,6 +157,7 @@ SwireUsb* swire_usb_alloc() {
     self->buffer_tx_sending = self->buffer_tx_1;
     self->buffer_tx_building = self->buffer_tx_2;
     self->buffer_rx_size = 0;
+    self->buffer_rx_start = 0;
     self->line_buffer = malloc(SW_LINE_BUFFER_SIZE);
     furi_check(self->line_buffer);
 
@@ -371,80 +375,61 @@ FuriStatus swire_usb_readline_str(SwireUsb* self, FuriString* output) {
 
 static int32_t
     swire_usb_read_internal(SwireUsb* self, uint8_t* buffer, uint32_t buffer_size, int until) {
-    global_debug()->rx_trace = 0;
+    self->debug_rx = 0;
     uint8_t* buffer_rx = self->buffer_rx;
 
     uint8_t* original_buffer = buffer;
-    uint32_t to_serve_from_leftover = MIN(buffer_size, self->buffer_rx_size);
-    if(to_serve_from_leftover > 0) {
-        uint32_t reading_count = to_serve_from_leftover;
-        uint8_t* found_until = NULL;
-        if(until >= 0) {
-            found_until = memchr(self->buffer_rx, until, to_serve_from_leftover);
-        }
-        if(found_until != NULL) {
-            reading_count = (uint32_t)(found_until - self->buffer_rx + 1);
-        }
-        memcpy(buffer, buffer_rx, reading_count);
-        buffer += reading_count;
-        buffer_size -= reading_count;
-        uint32_t new_leftover = self->buffer_rx_size - reading_count;
-        self->buffer_rx_size = new_leftover;
-        memcpy(buffer_rx, buffer_rx + reading_count, new_leftover);
-        if(found_until != NULL) {
-            goto exit_with_leftovers;
-        }
-    }
 
-    while(buffer_size > 0) {
-        uint32_t chunksize = MIN((uint32_t)buffer_size, (uint32_t)USB_CDC_PKT_LEN);
-        int32_t received = 0;
-        for(int receive_attempt = 0;; receive_attempt++) {
-            received = furi_hal_cdc_receive(self->vcp_ch, buffer, chunksize);
-            if(received > 0) {
+    if(buffer_size == 0) {
+        self->debug_rx = 2;
+        return 0;
+    }
+    for(;;) {
+        uint32_t to_serve_from_leftover = MIN(buffer_size, self->buffer_rx_size);
+        if(to_serve_from_leftover > 0) {
+            uint32_t reading_count = to_serve_from_leftover;
+            uint8_t* found_until = NULL;
+            uint8_t* buffer_rx_start_ptr = self->buffer_rx + self->buffer_rx_start;
+            if(until >= 0) {
+                found_until = memchr(buffer_rx_start_ptr, until, to_serve_from_leftover);
+            }
+            if(found_until != NULL) {
+                reading_count = (uint32_t)(found_until - buffer_rx_start_ptr + 1);
+            }
+            memcpy(buffer, buffer_rx_start_ptr, reading_count);
+            buffer += reading_count;
+            buffer_size -= reading_count;
+            self->buffer_rx_start += reading_count;
+            self->buffer_rx_size -= reading_count;
+            if(found_until != NULL) {
+                self->debug_rx = 6;
                 break;
             }
-            if(received < 0) {
-                global_debug()->rx_trace = 3;
-                return FuriStatusError;
-            }
-            if(receive_attempt > 2) {
-                global_debug()->rx_trace = 4;
-                return FuriStatusError;
-            }
-            FuriStatus status = furi_event_flag_wait(
-                self->event_flag_rx, SwUsbRxEventRxAvailable, FuriFlagWaitAny, self->timeout_ms);
-            if(status & FuriFlagError) {
-                global_debug()->rx_trace = (int32_t)(buffer - original_buffer) * 10000 + 5;
-                return status;
-            }
         }
-        buffer += received;
-        buffer_size -= received;
 
-        if(until >= 0) {
-            uint8_t* find = memchr(buffer - received, until, received);
-            if(find != NULL) {
-                uint32_t leftover = buffer - find - 1;
-                buffer -= leftover;
-                buffer_size += leftover;
-                self->buffer_rx_size = leftover;
-                if(leftover > 0) {
-                    memcpy(self->buffer_rx, buffer, leftover);
-                    global_debug()->rx_trace = 6;
-                    goto exit_with_leftovers;
-                }
-                global_debug()->rx_trace = 7;
-                goto exit_normal;
-            }
+        if(buffer_size == 0) {
+            self->debug_rx = 7;
+            break;
         }
+
+        FuriStatus status = furi_event_flag_wait(
+            self->event_flag_rx, SwUsbRxEventRxAvailable, FuriFlagWaitAny, self->timeout_ms);
+        if(status & FuriFlagError) {
+            self->debug_rx = (int32_t)(buffer - original_buffer) * 10000 + 5;
+            return status;
+        }
+
+        self->buffer_rx_start = 0;
+        self->buffer_rx_size = 0;
+        int32_t received = furi_hal_cdc_receive(self->vcp_ch, buffer_rx, USB_CDC_PKT_LEN);
+        if(received <= 0) {
+            self->debug_rx = 3;
+            return FuriStatusError;
+        }
+        self->buffer_rx_size = received;
     }
 
-    global_debug()->rx_trace = 8;
-    return buffer - original_buffer;
-exit_normal:
-    return buffer - original_buffer;
-exit_with_leftovers:
+    self->debug_rx = 8;
     return buffer - original_buffer;
 }
 
@@ -480,6 +465,10 @@ bool swire_usb_set_auto_flush(SwireUsb* self, bool auto_flush) {
     bool old = self->auto_flush;
     self->auto_flush = auto_flush;
     return old;
+}
+
+uint32_t swire_usb_get_debug_rx(SwireUsb* self) {
+    return self->debug_rx;
 }
 
 static void vcp_irq_state_callback(void* context, CdcState state) {

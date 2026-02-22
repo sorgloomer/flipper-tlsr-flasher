@@ -153,16 +153,16 @@ FuriStatus cmd_pgm_transaction_write(SwireApp* app, const char* cargs) {
         if(status != FuriStatusOk) {
             FURI_LOG_E(
                 "swire",
-                "error: could not read from usb, err: %lx, left: %ld, rx_trace: %ld",
+                "error: could not read from usb, err: %lx, left: %ld, debug_rx: %ld",
                 (uint32_t)status,
                 (uint32_t)bytecount,
-                (uint32_t)global_debug()->rx_trace);
+                (uint32_t)swire_usb_get_debug_rx(app->usb));
             swire_usb_printf_ln(
                 app->usb,
-                "error: could not read from usb, err: %lx, left: %ld, rx_trace: %ld",
+                "error: could not read from usb, err: %lx, left: %ld, debug_rx: %ld",
                 (uint32_t)status,
                 (uint32_t)bytecount,
-                (uint32_t)global_debug()->rx_trace);
+                (uint32_t)swire_usb_get_debug_rx(app->usb));
             return status;
         }
         for(int i = 0; i < chunk; i++) {
