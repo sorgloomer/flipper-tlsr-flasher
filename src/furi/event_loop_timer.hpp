@@ -20,7 +20,7 @@ public:
         FuriEventLoopTimerCallback callback,
         FuriEventLoopTimerType type,
         void* context) {
-        ptr = furi_event_loop_timer_alloc(event_loop.ptr, callback, type, context);
+        ptr = furi_event_loop_timer_alloc(event_loop.get_raw_ptr(), callback, type, context);
     }
 
     template <typename T>
@@ -29,15 +29,29 @@ public:
     }
 
     EventLoopTimer(EventLoopTimer&& other) {
+        *this = std::move(other);
+    }
+    EventLoopTimer& operator=(EventLoopTimer&& other) {
+        this->destroy();
         ptr = other.ptr;
+        other.ptr = nullptr;
+        return *this;
     }
 
     ~EventLoopTimer() {
-        furi_event_loop_timer_free(ptr);
+        this->destroy();
     }
 
-    void start(milli interval) {
-        furi_event_loop_timer_start(ptr, interval.count());
+    void destroy() {
+        if(ptr != nullptr) {
+            furi_event_loop_timer_free(ptr);
+        }
+        ptr = nullptr;
+    }
+    void start(u32ms interval) {
+        if(ptr != nullptr) {
+            furi_event_loop_timer_start(ptr, interval.count());
+        }
     }
 };
 }

@@ -1,6 +1,7 @@
 #include <furi.h>
 #include "./timerpool.hpp"
 #include "src/furi/duration.hpp"
+#include "src/buildconf.hpp"
 
 static void timerpool_handle_timer(void* context);
 static void timerhandle_cancel_and_delete(void* context);
@@ -16,6 +17,7 @@ TimerPool::TimerPool(FuriEventLoop* event_loop) {
 }
 
 TimerPool::~TimerPool() {
+    FURI_LOG_I(TAG, "TimerPool::~TimerPool checkpoint 1");
     TimerHandle* item = this->head->next;
     int i = 0;
     while(item != this->head) {
@@ -25,7 +27,7 @@ TimerPool::~TimerPool() {
         delete item;
         item = next;
     }
-    FURI_LOG_I("swire", "timerpool_free items %d", i);
+    FURI_LOG_I(TAG, "timerpool_free items %d", i);
     delete this->head;
 }
 
@@ -68,12 +70,12 @@ void TimerHandle::cancel() {
 }
 
 static void timerpool_handle_timer(void* context) {
-    TimerHandle* item = (TimerHandle*)context;
+    TimerHandle* item = static_cast<TimerHandle*>(context);
     if(item->callback != nullptr) {
         item->callback(item->context);
     }
     if(item->type == FuriEventLoopTimerTypeOnce) {
-        furi_event_loop_pend_callback( // TODO check if delay is needed
+        furi_event_loop_pend_callback( // TODO check if delay is needed. Yes, it is needed, because the furi kernel is not prepared for this
             item->pool->get_raw_event_loop(),
             timerhandle_cancel_and_delete,
             item);

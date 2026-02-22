@@ -11,6 +11,8 @@
 
 using namespace std::chrono_literals;
 
+#define _TRACE_CHECPOINT(...) FURI_LOG_T(TAG, "swire_main checkpoint " __VA_ARGS__)
+
 void swire_main() {
     FURI_LOG_I("swire", "tlsr_swire_demo_app start");
 
@@ -22,7 +24,13 @@ void swire_main() {
     {
         auto app = std::make_unique<SwireApp>();
         global_app = app.get();
-        app->run();
+        {
+            Implicits implicits{.timers = app->timers.get(), .app = app.get()};
+            [[maybe_unused]] auto _ = main_async(&implicits);
+            _TRACE_CHECPOINT("3.1");
+            app->run();
+            _TRACE_CHECPOINT("3.2");
+        }
         global_app = nullptr;
     }
 

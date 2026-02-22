@@ -12,10 +12,22 @@ public:
         ptr = furi_event_flag_alloc();
     }
     EventFlag(EventFlag&& other) {
-        ptr = other.ptr;
+        *this = std::move(other);
+    }
+    EventFlag& operator=(EventFlag&& other) {
+        this->destroy();
+        this->ptr = other.ptr;
+        other.ptr = nullptr;
+        return *this;
     }
     ~EventFlag() {
-        furi_event_flag_free(ptr);
+        this->destroy();
+    }
+    void destroy() {
+        if(ptr != nullptr) {
+            furi_event_flag_free(ptr);
+        }
+        ptr = nullptr;
     }
 
     TFlags set(TFlags flags) {
@@ -27,7 +39,7 @@ public:
     TFlags get() {
         return furi_event_flag_get(ptr);
     }
-    TFlags wait(TFlags flags, FuriFlag options, milli32 timeout) {
+    TFlags wait(TFlags flags, FuriFlag options, u32ms timeout) {
         return furi_event_flag_wait(ptr, flags, options, timeout);
     }
 };

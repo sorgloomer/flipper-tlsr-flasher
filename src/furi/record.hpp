@@ -1,5 +1,5 @@
 #pragma once
-#include <cstring>
+#include <utility>
 #include "furi/core/record.h"
 
 namespace furi {
@@ -21,20 +21,29 @@ public:
         : Record(nullptr) {
     }
     Record(Record&& other) {
-        std::memmove(this, &other, sizeof(Record));
+        *this = std::move(other);
     }
     Record& operator=(Record&& other) {
-        this->~Record();
-        std::memmove(this, &other, sizeof(Record));
+        this->destroy();
+        this->ptr = other.ptr;
+        this->name = other.name;
+        other.ptr = nullptr;
+        other.name = nullptr;
         return *this;
     }
     ~Record() {
-        if(this->name != nullptr) {
-            furi_record_close(this->name);
-        }
+        this->destroy();
     }
     TContent* get() {
         return this->ptr;
+    }
+
+    void destroy() {
+        if(this->name != nullptr) {
+            furi_record_close(this->name);
+        }
+        this->name = nullptr;
+        this->ptr = nullptr;
     }
 };
 

@@ -32,6 +32,6 @@ void Blinker::_handle_timer() {
     light_rgb_set(this->led_state ? this->led_color : 0);
 }
 static void blinker_handle_timer(void* context) {
-    Blinker* self = (Blinker*)context;
+    Blinker* self = static_cast<Blinker*>(context);
     self->_handle_timer();
 }

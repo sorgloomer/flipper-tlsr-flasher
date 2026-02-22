@@ -1,4 +1,5 @@
 #pragma once
+class SwireApp;
 
 #include <memory>
 #include <string>
@@ -20,6 +21,7 @@
 #include "src/swire/swire_bitbang.hpp"
 #include "src/furi/event_loop.hpp"
 #include "src/furi/record.hpp"
+#include "src/main_async.hpp"
 
 typedef enum {
     SwireAppViewVarItemList,
@@ -47,7 +49,7 @@ public:
     uint32_t debug_value;
     uint32_t debug_value_to_show;
 
-    NotificationApp* notifications;
+    furi::Record<NotificationApp> notifications;
     VariableItemList* var_item_list;
     ViewDispatcher* view_dispatcher;
     furi::EventLoop event_loop;
@@ -55,6 +57,7 @@ public:
     Widget* widget;
     DialogEx* dialog;
 
+public:
     SwireApp();
     ~SwireApp();
     void run();

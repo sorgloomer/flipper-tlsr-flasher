@@ -1,6 +1,7 @@
 
 #include <memory>
 #include "src/app/config.hpp"
+#include "src/buildconf.hpp"
 #include <gui/view_dispatcher.h>
 
 #include <power/power_service/power.h>
@@ -41,81 +42,97 @@ SwireApp::SwireApp()
     this->usb = nullptr;
     this->swire = nullptr;
 
-    FURI_LOG_T("swire", "app_alloc checkpoint 1");
+    SW_DEBUG_TRACE("app_alloc 1");
     this->config = swire_config_alloc();
 
-    FURI_LOG_T("swire", "app_alloc checkpoint 1.2");
+    SW_DEBUG_TRACE("app_alloc 1.2");
     this->last_tick = swire_clock_get_cycclk();
-    FURI_LOG_T("swire", "app_alloc checkpoint 1.3");
+    SW_DEBUG_TRACE("app_alloc 1.3");
     this->view_dispatcher = view_dispatcher_alloc();
-    FURI_LOG_T("swire", "app_alloc checkpoint 1.4");
+    SW_DEBUG_TRACE("app_alloc 1.4");
     this->event_loop = furi::EventLoop(view_dispatcher_get_event_loop(this->view_dispatcher));
-    FURI_LOG_T("swire", "app_alloc checkpoint 1.5");
+    SW_DEBUG_TRACE("app_alloc 1.5");
     this->timers = std::make_unique<TimerPool>(this->event_loop.get_raw_ptr());
-    FURI_LOG_T("swire", "app_alloc checkpoint 1.6");
+    SW_DEBUG_TRACE("app_alloc 1.6");
     this->blinker = std::make_unique<Blinker>(this->event_loop.get_raw_ptr());
 
-    FURI_LOG_T("swire", "app_alloc checkpoint 2.1");
+    SW_DEBUG_TRACE("app_alloc 2.1");
     this->gui = furi::Record<Gui>(RECORD_GUI);
-    FURI_LOG_T("swire", "app_alloc checkpoint 2.2");
+    SW_DEBUG_TRACE("app_alloc 2.2");
     this->power = furi::Record<Power>(RECORD_POWER);
 
-    FURI_LOG_T("swire", "app_alloc checkpoint 2.3");
+    SW_DEBUG_TRACE("app_alloc 2.3");
 
     this->scene_manager = scene_manager_alloc(&swire_app_scene_handlers, this);
-    FURI_LOG_T("swire", "app_alloc checkpoint 8");
+    SW_DEBUG_TRACE("app_alloc 8");
     this->widget = widget_alloc();
-    this->notifications = (NotificationApp*)furi_record_open(RECORD_NOTIFICATION);
+    this->notifications = furi::Record<NotificationApp>(RECORD_NOTIFICATION);
     this->dialog = dialog_ex_alloc();
 
-    FURI_LOG_T("swire", "app_alloc checkpoint 8.0");
+    SW_DEBUG_TRACE("app_alloc 8.0");
     view_dispatcher_set_event_callback_context(this->view_dispatcher, this);
-    FURI_LOG_T("swire", "app_alloc checkpoint 8.1");
+    SW_DEBUG_TRACE("app_alloc 8.1");
     view_dispatcher_set_custom_event_callback(this->view_dispatcher, app_custom_event_callback);
-    FURI_LOG_T("swire", "app_alloc checkpoint 8.2");
+    SW_DEBUG_TRACE("app_alloc 8.2");
     view_dispatcher_set_navigation_event_callback(this->view_dispatcher, app_back_event_callback);
-    FURI_LOG_T("swire", "app_alloc checkpoint 8.3");
+    SW_DEBUG_TRACE("app_alloc 8.3");
     view_dispatcher_set_tick_event_callback(this->view_dispatcher, app_tick_event_callback, 100);
-    FURI_LOG_T("swire", "app_alloc checkpoint 8.4");
+    SW_DEBUG_TRACE("app_alloc 8.4");
     view_dispatcher_attach_to_gui(
         this->view_dispatcher, this->gui.get(), ViewDispatcherTypeFullscreen);
 
-    FURI_LOG_T("swire", "app_alloc checkpoint 9");
+    SW_DEBUG_TRACE("app_alloc 9");
     this->var_item_list = variable_item_list_alloc();
     view_dispatcher_add_view(
         this->view_dispatcher,
         SwireAppViewVarItemList,
         variable_item_list_get_view(this->var_item_list));
 
-    FURI_LOG_T("swire", "app_alloc checkpoint 10");
+    SW_DEBUG_TRACE("app_alloc 10");
     scene_manager_next_scene(this->scene_manager, SwireSceneStart);
 
-    FURI_LOG_T("swire", "app_alloc checkpoint 11");
+    SW_DEBUG_TRACE("app_alloc 11");
     app_set_timer(this, 50ms, FuriEventLoopTimerTypePeriodic, loop_iteration);
     app_set_timer(this, 250ms, FuriEventLoopTimerTypePeriodic, app_handle_periodic_debug_info);
 
-    FURI_LOG_T("swire", "app_alloc checkpoint 12");
+    SW_DEBUG_TRACE("app_alloc 12");
     app_set_blinker_state(this, BlinkerStateIdle);
 
-    app_set_usb_enabled(this, true);
-    FURI_LOG_T("swire", "app_alloc return");
+    // app_set_usb_enabled(this, true); // TODO auto enable
+    SW_DEBUG_TRACE("app_alloc return");
 }
 
 SwireApp::~SwireApp() {
+    SW_DEBUG_TRACE("~SwireApp 1");
     app_set_usb_enabled(this, false);
+    SW_DEBUG_TRACE("~SwireApp 2");
     swire_usb_free(this->usb);
+    SW_DEBUG_TRACE("~SwireApp 3");
     swire_bitbang_free(this->swire);
 
+    SW_DEBUG_TRACE("~SwireApp 4");
     view_dispatcher_remove_view(this->view_dispatcher, SwireAppViewVarItemList);
 
+    SW_DEBUG_TRACE("~SwireApp 5");
     dialog_ex_free(this->dialog);
-    furi_record_close(RECORD_NOTIFICATION);
+    SW_DEBUG_TRACE("~SwireApp 6");
+    SW_DEBUG_TRACE("~SwireApp 7");
     widget_free(this->widget);
+    SW_DEBUG_TRACE("~SwireApp 8");
     variable_item_list_free(this->var_item_list);
+    SW_DEBUG_TRACE("~SwireApp 9");
     scene_manager_free(this->scene_manager);
-    furi_record_close(RECORD_GUI);
-    furi_record_close(RECORD_POWER);
+    SW_DEBUG_TRACE("~SwireApp 10");
 
+    this->blinker = nullptr;
+    SW_DEBUG_TRACE("~SwireApp 10.2");
+    this->timers = nullptr;
+    SW_DEBUG_TRACE("~SwireApp 10.3");
+    this->event_loop = nullptr;
+    SW_DEBUG_TRACE("~SwireApp 10.4");
+
+    this->gui = nullptr;
+    SW_DEBUG_TRACE("~SwireApp 10.5");
     //if(self->timer_poll != NULL) furi_event_loop_timer_free(self->timer_poll);
     //if(self->timer_debug != NULL) furi_event_loop_timer_free(self->timer_debug);
     view_dispatcher_free(this->view_dispatcher);
@@ -123,7 +140,9 @@ SwireApp::~SwireApp() {
     // furi_event_loop_unsubscribe(self->event_loop, self->queue);
     // furi_message_queue_free(self->queue);
 
+    SW_DEBUG_TRACE("~SwireApp 12");
     swire_config_free(this->config);
+    SW_DEBUG_TRACE("~SwireApp 13");
 }
 
 static bool app_custom_event_callback(void* context, uint32_t event) {
