@@ -1,16 +1,15 @@
-#pragma once
 
-#include "src/app/app.h"
-#include "src/utils/global_debug.h"
-#include "src/swire/swire_bitbang.h"
-#include "src/commands/commands_bitbang.h"
-#include "src/commands/commands_pgm.h"
+#include "src/app/app.hpp"
+#include "src/utils/global_debug.hpp"
+#include "src/commands/commands_bitbang.hpp"
+#include "src/commands/commands_pgm.hpp"
+#include "src/commands/commands.hpp"
 
-void handle_text_command(SwireApp* app, FuriString* cmd) {
+void handle_text_command(SwireApp* app, std::string& cmd) {
     SwireUsb* usb = app->usb;
 
-    swire_usb_printf_ln(usb, "# > %s", furi_string_get_cstr(cmd));
-    if(furi_string_equal(cmd, "ga7g4drb info") || furi_string_equal(cmd, "info")) {
+    swire_usb_printf_ln(usb, "# > %s", cmd.c_str());
+    if(cmd == "ga7g4drb info" || cmd == "info") {
         swire_usb_printf_ln(usb, "flitswire info response start");
         swire_usb_printf_ln(usb, "version=v%s", APP_VERSION);
         swire_usb_printf_ln(usb, "bitrate=TODO");
@@ -19,30 +18,30 @@ void handle_text_command(SwireApp* app, FuriString* cmd) {
         return;
     }
 
-    if(furi_string_equal(cmd, "ping")) {
+    if(cmd == "ping") {
         swire_usb_printf_ln(usb, "pong");
         return;
     }
 
-    if(furi_string_equal(cmd, "close")) {
+    if(cmd == "close") {
         swire_usb_printf_ln(usb, "ok");
         furi_event_loop_stop(app->event_loop);
         return;
     }
-    if(furi_string_equal(cmd, "ga7g4drb close")) {
+    if(cmd == "ga7g4drb close") {
         swire_usb_printf_ln(usb, "ga7g4drb closing");
         furi_event_loop_stop(app->event_loop);
         return;
     }
 
-    if(furi_string_equal(cmd, "send hex")) {
+    if(cmd == "send hex") {
         FuriStatus status = swire_usb_readline_str(usb, cmd);
-        if(status & FuriFlagError) {
+        if((FuriFlag)status & FuriFlagError) {
             global_debug()->err_loc = 31;
             global_debug()->err = status;
             return;
         }
-        swire_usb_printf_ln(usb, "send hex request received %d", furi_string_utf8_length(cmd));
+        swire_usb_printf_ln(usb, "send hex request received %d", cmd.size());
         return;
     }
 
@@ -50,7 +49,7 @@ void handle_text_command(SwireApp* app, FuriString* cmd) {
         return;
     }
 
-    if(furi_string_equal(cmd, "bbt")) {
+    if(cmd == "bbt") {
         cmd_bitbang_test_simple(app);
     }
 }

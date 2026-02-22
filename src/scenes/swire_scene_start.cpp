@@ -4,12 +4,12 @@
 #include <dolphin/dolphin.h>
 #include <string.h>
 
-#include "src/scenes/swire_scene.h"
-#include "src/scenes/swire_scene_start.h"
-#include "src/scenes/swire_gui_event.h"
-#include "src/app/app.h"
-#include "src/app/bitrate_options.h"
-#include "src/commands/commands_bitbang.h"
+#include "swire_scene.hpp"
+#include "swire_scene_start.hpp"
+#include "swire_gui_event.hpp"
+#include "src/app/app.hpp"
+#include "src/app/bitrate_options.hpp"
+#include "src/commands/commands_bitbang.hpp"
 
 #define _BITRATE_STR_BUFFER_SIZE 16
 
@@ -30,7 +30,7 @@ const char* const swire_usb_enabled_text[SwireUsbEnabled__count] = {
 
 static void scene_start_var_list_enter_callback(void* context, uint32_t index) {
     furi_assert(context);
-    SwireApp* app = context;
+    SwireApp* app = (SwireApp*)context;
     switch(index) {
     case SwireStartItemBitbangRead:
         view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEventBitbangRead);
@@ -45,7 +45,7 @@ static void scene_start_var_list_enter_callback(void* context, uint32_t index) {
 }
 
 static void usb_enabled_change_callback(VariableItem* item) {
-    SwireApp* app = variable_item_get_context(item);
+    SwireApp* app = (SwireApp*)variable_item_get_context(item);
     uint8_t index = variable_item_get_current_value_index(item);
 
     variable_item_set_current_value_text(item, swire_usb_enabled_text[index]);
@@ -60,7 +60,7 @@ static void usb_enabled_change_callback(VariableItem* item) {
 }
 
 static void bitrate_change_callback(VariableItem* item) {
-    SwireApp* app = variable_item_get_context(item);
+    SwireApp* app = (SwireApp*)variable_item_get_context(item);
     uint8_t index = variable_item_get_current_value_index(item);
     bitrate_update_text(item);
     app->config->bitrate = BitrateOptions__values[index];
@@ -75,7 +75,7 @@ static void bitrate_update_text(VariableItem* item) {
 }
 
 void swire_scene_start_on_enter(void* context) {
-    SwireApp* app = context;
+    SwireApp* app = (SwireApp*)context;
     VariableItemList* var_item_list = app->var_item_list;
 
     variable_item_list_set_enter_callback(var_item_list, scene_start_var_list_enter_callback, app);
@@ -128,7 +128,7 @@ void swire_scene_start_on_enter(void* context) {
 }
 
 bool swire_scene_start_on_event(void* context, SceneManagerEvent event) {
-    SwireApp* app = context;
+    SwireApp* app = (SwireApp*)context;
 
     if(event.type != SceneManagerEventTypeCustom) {
         return false;
@@ -156,7 +156,7 @@ bool swire_scene_start_on_event(void* context, SceneManagerEvent event) {
 }
 
 void swire_scene_start_on_exit(void* context) {
-    SwireApp* app = context;
+    SwireApp* app = (SwireApp*)context;
     variable_item_list_reset(app->var_item_list);
 }
 

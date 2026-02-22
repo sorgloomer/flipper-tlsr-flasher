@@ -1,20 +1,20 @@
-#include <string.h>
+#include <string>
+#include <memory>
 #include <furi.h>
 #include <furi_hal_resources.h>
 
-#include "src/app/app.h"
-#include "src/swire/swire_bitbang.h"
-#include "src/commands/commands_pgm.h"
-#include "src/utils/global_debug.h"
+#include "src/app/app.hpp"
+#include "src/swire/swire_bitbang.hpp"
+#include "src/commands/commands_pgm.hpp"
 
 #define _OK_RESPONSES           0
 #define _TRANSACTION_CHUNK_SIZE 16
 
-static bool cmd_matches(FuriString* input, const char* cmd);
-static const char* cmd_get_params(FuriString* cmd);
+static bool cmd_matches(const std::string& input, const char* cmd);
+static const char* cmd_get_params(const std::string& cmd);
 static SwireBitbang* cmd_swire_alloc(SwireApp* app);
 
-bool cmd_pgm(SwireApp* app, FuriString* cmd) {
+bool cmd_pgm(SwireApp* app, std::string& cmd) {
     const char* cargs = cmd_get_params(cmd);
 
     if(cmd_matches(cmd, "swire_init")) {
@@ -306,7 +306,7 @@ FuriStatus cmd_pgm_bytes_write(SwireApp* app, const char* cargs) {
     while(bytecount > 0) {
         int32_t chunksize = MIN(_TRANSACTION_CHUNK_SIZE, bytecount);
         status = swire_usb_read(app->usb, buffer, chunksize);
-        if(status & FuriFlagError) {
+        if((FuriFlag)status & FuriFlagError) {
             app->swire->error = status == FuriStatusErrorTimeout ? SwireBitbangErrorTimeout :
                                                                    SwireBitbangErrorUnknown;
             return status;
@@ -358,7 +358,7 @@ FuriStatus cmd_pgm_bytes_read(SwireApp* app, const char* cargs) {
         return FuriStatusErrorParameter;
     }
 
-    uint8_t* buffer = malloc(bytecount);
+    std::unique_ptr<uint8_t[]> buffer(new uint8_t[bytecount]);
     furi_check(buffer);
 
     for(int i = 0; i < bytecount; i++) {
@@ -369,13 +369,12 @@ FuriStatus cmd_pgm_bytes_read(SwireApp* app, const char* cargs) {
     swire_usb_writeline_cstr(app->usb, "ok");
 #endif
     swire_usb_printf_ln(app->usb, "data %lx", (int32_t)bytecount);
-    status = swire_usb_write(app->usb, buffer, bytecount);
-    if(status & FuriFlagError) {
+    status = swire_usb_write(app->usb, buffer.get(), bytecount);
+    if((FuriFlag)status & FuriFlagError) {
         return status;
     }
 
     swire_bitbang_timer_join(app->swire);
-    free(buffer);
     return FuriStatusOk;
 }
 
@@ -405,21 +404,21 @@ FuriStatus cmd_pgm_reset(SwireApp* app, const char* cargs) {
     return FuriStatusOk;
 }
 
-bool cmd_matches(FuriString* input, const char* cmd) {
-    if(!furi_string_start_with(input, cmd)) {
+static bool cmd_matches(const std::string& input, const char* cmd) {
+    if(!input.starts_with(cmd)) {
         return false;
     }
     unsigned int cmdlen = strlen(cmd);
-    if(furi_string_size(input) == cmdlen) {
+    if(input.size() == cmdlen) {
         return true;
     }
-    if(furi_string_size(input) > cmdlen && furi_string_get_char(input, cmdlen) == ' ') {
+    if(input.size() > cmdlen && input[cmdlen] == ' ') {
         return true;
     }
     return false;
 }
-const char* cmd_get_params(FuriString* cmd) {
-    const char* ccmd = furi_string_get_cstr(cmd);
+static const char* cmd_get_params(const std::string& cmd) {
+    const char* ccmd = cmd.c_str();
     const char* space = strchr(ccmd, ' ');
     return space != NULL ? space + 1 : ccmd + strlen(ccmd);
 }

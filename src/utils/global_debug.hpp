@@ -1,6 +1,9 @@
 #pragma once
 
-#include "src/app/app.h"
+#include <vector>
+#include <string>
+
+#include "src/app/app.hpp"
 #include <stdint.h>
 #include <furi.h>
 
@@ -19,7 +22,7 @@ typedef struct {
     int32_t err_loc;
     int32_t err;
     int32_t rx_trace;
-    FuriString** logs;
+    std::vector<std::string> logs;
     uint32_t log_capacity;
 } GlobalDebugInfo;
 GlobalDebugInfo* global_debug();

@@ -1,10 +1,12 @@
-#include "src/usb/usb.h"
-#include "src/utils/global_debug.h"
-#include "src/utils/ringbuffer.h"
+#include <string>
 
-#include "usb_cdc.h"
+#include "src/usb/usb.hpp"
+#include "src/utils/global_debug.hpp"
+#include "src/utils/ringbuffer.hpp"
+#include "src/utils/str_printf.hpp"
 
-#include <string.h>
+#include <usb_cdc.h>
+
 #include <toolbox/api_lock.h>
 #include <cli/cli_vcp.h>
 #include <furi_hal.h>
@@ -67,7 +69,7 @@ struct SwireUsb {
 
     // RingBuffer ringbuffer_rx;
     // FuriString* string_rx;
-    FuriString* string_tx;
+    std::string string_tx;
     uint8_t* line_buffer;
     bool auto_flush;
 
@@ -114,11 +116,12 @@ void swire_hal_usb_set_config(FuriHalUsbInterface* config);
         return (status);              \
     }
 
-#define STATUS_EXPECT_OK(status)                                        \
-    if((status) != FuriStatusOk) {                                      \
-        return ((status) & FuriFlagError) ? (status) : FuriStatusError; \
+#define STATUS_EXPECT_OK(status)                                                  \
+    if((status) != FuriStatusOk) {                                                \
+        return (((FuriFlag)status) & FuriFlagError) ? (status) : FuriStatusError; \
     }
-#define STATUS_DROP_VALUE(status) ((status) & FuriFlagError) ? (status) : FuriStatusOk;
+#define STATUS_DROP_VALUE(status) \
+    (((uint32_t)(status)) & FuriFlagError) ? ((FuriStatus)(status)) : FuriStatusOk;
 
 static const CdcCallbacks cdc_cb = {
     vcp_irq_on_cdc_tx_complete,
@@ -129,7 +132,7 @@ static const CdcCallbacks cdc_cb = {
 };
 
 SwireUsb* swire_usb_alloc() {
-    SwireUsb* self = malloc(sizeof(SwireUsb));
+    SwireUsb* self = (SwireUsb*)malloc(sizeof(SwireUsb));
     furi_check(self, "swire_usb_alloc");
     // self->queue = queue;
     // self->queue_message_rx = queue_message_rx;
@@ -152,13 +155,12 @@ SwireUsb* swire_usb_alloc() {
     // swire_usb_set_on_state_change(self, NULL, NULL);
     // ringbuffer_init(&self->ringbuffer_rx, USB_CDC_RX_RINGBUF_SIZE);
     // self->string_rx = furi_string_alloc();
-    self->string_tx = furi_string_alloc();
-    self->cli_vcp = furi_record_open(RECORD_CLI_VCP);
+    self->cli_vcp = (CliVcp*)furi_record_open(RECORD_CLI_VCP);
     self->buffer_tx_sending = self->buffer_tx_1;
     self->buffer_tx_building = self->buffer_tx_2;
     self->buffer_rx_size = 0;
     self->buffer_rx_start = 0;
-    self->line_buffer = malloc(SW_LINE_BUFFER_SIZE);
+    self->line_buffer = (uint8_t*)malloc(SW_LINE_BUFFER_SIZE);
     furi_check(self->line_buffer);
 
     // furi_event_loop_subscribe_thread_flags(self->event_loop, swire_usb_handle_thread_flag, self);
@@ -180,7 +182,6 @@ void swire_usb_free(SwireUsb* self) {
     furi_record_close(RECORD_CLI_VCP);
     // ringbuffer_deinit(&self->ringbuffer_rx);
     // furi_string_free(self->string_rx);
-    furi_string_free(self->string_tx);
     free(self->line_buffer);
     swire_usb_vcp_deinit2(self);
     free(self);
@@ -217,31 +218,22 @@ static void swire_usb_vcp_deinit2(SwireUsb* self) {
 FuriStatus swire_usb_printf(SwireUsb* self, const char* format, ...) {
     va_list args;
     va_start(args, format);
-    int printed = furi_string_vprintf(self->string_tx, format, args);
+    str_vprintf(self->string_tx, format, args);
     va_end(args);
-    if(printed < 0) {
-        return FuriStatusErrorParameter;
-    }
     return swire_usb_write_str(self, self->string_tx);
 }
 
 FuriStatus swire_usb_printf_ln(SwireUsb* self, const char* format, ...) {
     va_list args;
     va_start(args, format);
-    int printed = furi_string_vprintf(self->string_tx, format, args);
+    str_vprintf(self->string_tx, format, args);
     va_end(args);
-    if(printed < 0) {
-        return FuriStatusErrorParameter;
-    }
-    furi_string_cat(self->string_tx, "\r\n");
+    self->string_tx += '\n';
     return swire_usb_write_str(self, self->string_tx);
 }
 
 FuriStatus swire_usb_vprintf(SwireUsb* self, const char* format, va_list args) {
-    int printed = furi_string_vprintf(self->string_tx, format, args);
-    if(printed < 0) {
-        return FuriStatusErrorParameter;
-    }
+    str_vprintf(self->string_tx, format, args);
     return swire_usb_write_str(self, self->string_tx);
 }
 
@@ -249,8 +241,8 @@ FuriStatus swire_usb_write_cstr(SwireUsb* self, const char* msg) {
     return swire_usb_write(self, (uint8_t*)msg, strlen(msg));
 }
 
-FuriStatus swire_usb_write_str(SwireUsb* self, FuriString* msg) {
-    return swire_usb_write_cstr(self, furi_string_get_cstr(msg));
+FuriStatus swire_usb_write_str(SwireUsb* self, const std::string& msg) {
+    return swire_usb_write_cstr(self, msg.c_str());
 }
 
 FuriStatus swire_usb_writeline_cstr(SwireUsb* self, const char* msg) {
@@ -261,8 +253,9 @@ FuriStatus swire_usb_writeline_cstr(SwireUsb* self, const char* msg) {
     STATUS_EXPECT_OK(status);
     return swire_usb_write_cstr(self, "\n");
 }
-FuriStatus swire_usb_writeline_str(SwireUsb* self, FuriString* msg) {
-    return swire_usb_writeline_cstr(self, furi_string_get_cstr(msg));
+
+FuriStatus swire_usb_writeline_str(SwireUsb* self, const std::string& msg) {
+    return swire_usb_writeline_cstr(self, msg.c_str());
 }
 
 CdcState swire_usb_get_cdc_state(SwireUsb* self) {
@@ -282,13 +275,6 @@ FuriMessageQueue* swire_usb_get_queue(SwireUsb* self) {
 FuriEventFlag* swire_usb_get_event_flag_tx(SwireUsb* self) {
     return self->event_flag_tx;
 }
-
-#define SWAP(a, b) _SWAP(a, b, _tmp_##__LINE__)
-
-#define _SWAP(a, b, t) \
-    typeof(a) t = (a); \
-    (a) = (b);         \
-    (b) = (t);
 
 FuriStatus swire_usb_write(SwireUsb* self, uint8_t* buffer, uint32_t buffer_size) {
     FuriStatus status;
@@ -320,22 +306,24 @@ static FuriStatus swire_usb_wait_swap_send(SwireUsb* self) {
     if(self->buffer_tx_size == 0) {
         return FuriStatusOk;
     }
-    FuriStatus status = furi_event_flag_wait(
+    uint32_t status = furi_event_flag_wait(
         self->event_flag_tx, SwUsbTxEventTxComplete, FuriFlagWaitAny, self->timeout_ms);
     if(status & FuriFlagError) {
         furi_event_flag_set(self->event_flag_tx, SwUsbTxEventTxComplete);
-        return status;
+        return (FuriStatus)status;
     }
-    SWAP(self->buffer_tx_building, self->buffer_tx_sending);
+    std::swap(self->buffer_tx_building, self->buffer_tx_sending);
     furi_hal_cdc_send(self->vcp_ch, self->buffer_tx_sending, self->buffer_tx_size);
     self->buffer_tx_size = 0;
     return FuriStatusOk;
 }
 
 FuriStatus swire_usb_write_flush(SwireUsb* self) {
-    FuriStatus status = swire_usb_wait_swap_send(self);
-    STATUS_EXPECT_OK(status);
-    status = furi_event_flag_wait(
+    {
+        FuriStatus status = swire_usb_wait_swap_send(self);
+        STATUS_EXPECT_OK(status);
+    }
+    uint32_t status = furi_event_flag_wait(
         self->event_flag_tx,
         SwUsbTxEventTxComplete,
         FuriFlagWaitAny | FuriFlagNoClear,
@@ -349,7 +337,7 @@ FuriStatus swire_usb_read(SwireUsb* self, uint8_t* buffer, uint32_t buffer_size)
     }
     int32_t received = swire_usb_read_internal(self, buffer, buffer_size, -1);
     if(received & FuriFlagError) {
-        return received;
+        return (FuriStatus)received;
     }
     if(received != (int32_t)buffer_size) {
         return FuriStatusError;
@@ -357,10 +345,10 @@ FuriStatus swire_usb_read(SwireUsb* self, uint8_t* buffer, uint32_t buffer_size)
     return FuriStatusOk;
 }
 
-FuriStatus swire_usb_readline_str(SwireUsb* self, FuriString* output) {
+FuriStatus swire_usb_readline_str(SwireUsb* self, std::string& output) {
     int32_t received = swire_usb_read_internal(self, self->line_buffer, SW_LINE_BUFFER_SIZE, '\n');
     if(received & FuriFlagError) {
-        return received;
+        return (FuriStatus)received;
     }
     int32_t endindex = received - 1;
     if(endindex >= 0 && self->line_buffer[endindex] == '\n') {
@@ -369,7 +357,8 @@ FuriStatus swire_usb_readline_str(SwireUsb* self, FuriString* output) {
             endindex--;
         }
     }
-    furi_string_set_strn(output, (const char*)self->line_buffer, endindex + 1);
+    self->line_buffer[endindex + 1] = '\0';
+    output = (char*)self->line_buffer;
     return FuriStatusOk;
 }
 
@@ -391,7 +380,7 @@ static int32_t
             uint8_t* found_until = NULL;
             uint8_t* buffer_rx_start_ptr = self->buffer_rx + self->buffer_rx_start;
             if(until >= 0) {
-                found_until = memchr(buffer_rx_start_ptr, until, to_serve_from_leftover);
+                found_until = (uint8_t*)memchr(buffer_rx_start_ptr, until, to_serve_from_leftover);
             }
             if(found_until != NULL) {
                 reading_count = (uint32_t)(found_until - buffer_rx_start_ptr + 1);
@@ -412,7 +401,7 @@ static int32_t
             break;
         }
 
-        FuriStatus status = furi_event_flag_wait(
+        uint32_t status = furi_event_flag_wait(
             self->event_flag_rx, SwUsbRxEventRxAvailable, FuriFlagWaitAny, self->timeout_ms);
         if(status & FuriFlagError) {
             self->debug_rx = (int32_t)(buffer - original_buffer) * 10000 + 5;

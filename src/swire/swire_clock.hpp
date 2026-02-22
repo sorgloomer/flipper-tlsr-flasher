@@ -1,6 +1,6 @@
 #pragma once
 #include <furi.h>
-#include "swire_common.h"
+#include "swire_common.hpp"
 
 #define SWIRE_SYSTEM_CLOCK_FREQ    (SystemCoreClock)
 #define SWIRE_SYSTEM_CLOCK_CURRENT (DWT->CYCCNT)

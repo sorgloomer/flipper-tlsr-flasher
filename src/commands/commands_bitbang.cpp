@@ -1,12 +1,12 @@
-#include "src/commands/commands_bitbang.h"
-#include "src/swire/swire_clock.h"
-#include "src/utils/light_rgb.h"
+#include "./commands_bitbang.hpp"
+#include "src/swire/swire_clock.hpp"
+#include "src/utils/light_rgb.hpp"
 
 void cmd_bitbang_test_simple(SwireApp* app) {
     light_rgb_set(0xffff00);
     SwireBitbang* swire = swire_bitbang_alloc_with_sws((IoPins){
-        .out = &gpio_ext_pa7,
         .in = &gpio_ext_pa6,
+        .out = &gpio_ext_pa7,
     });
     swire_bitbang_set_bitrate(swire, app->config->bitrate);
 
@@ -36,7 +36,10 @@ void cmd_bitbang_read(SwireApp* app) {
     const GpioPin* pin_trigger = &gpio_ext_pc3;
     const GpioPin* pin_sws = &gpio_ext_pa7;
 
-    SwireBitbang* swire = swire_bitbang_alloc_with_sws((IoPins){.out = pin_sws, .in = pin_sws});
+    SwireBitbang* swire = swire_bitbang_alloc_with_sws((IoPins){
+        .in = pin_sws,
+        .out = pin_sws,
+    });
     swire_bitbang_set_bitrate(swire, app->config->bitrate);
 
     furi_hal_gpio_init_simple(pin_power, GpioModeOutputPushPull);
@@ -153,7 +156,7 @@ void cmd_bitbang_test_switching_freq(SwireApp* app) {
     __disable_irq();
     for(volatile int i = 0; i < 10000;) {
         *odr &= bits0;
-        i++;
+        i = i + 1;
         asm("nop");
         *odr |= bits1;
     }

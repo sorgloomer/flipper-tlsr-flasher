@@ -283,14 +283,16 @@ class TlsrFlash:
         with ExitStack() as stack:
             stack.enter_context(self.with_cs())
             stack.enter_context(self.cpu.with_fifo())
-            print(f"[d] flash.mspi_send_data({data!r})")
+            if self.swire.debug:
+                print(f"[d] flash.mspi_send_data({data!r})")
             self.swire.transaction_write(REG_SPI_DATA, data)
 
     def read(self, length):
         with ExitStack() as stack:
             stack.enter_context(self.with_cs())
             stack.enter_context(self.cpu.with_fifo())
-            print(f"[d] flash.read({length!r})")
+            if self.swire.debug:
+                print(f"[d] flash.read({length!r})")
             return self.swire.transaction_read(REG_SPI_DATA, length)
 
     def mspi_init_read(self, addr):
@@ -545,7 +547,7 @@ class BandwidthCounter:
             self.pivot += self.window
             if self.first_print:
                 self.first_print = False
-            print(f"[d] Read speed: {humanbytes(self.count_window / self.window)}/s")
+            print(f"[i] Read speed: {humanbytes(self.count_window / self.window)}/s")
             self.count_window = 0
 
     def humantotal(self):

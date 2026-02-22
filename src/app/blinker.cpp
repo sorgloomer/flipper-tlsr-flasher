@@ -1,10 +1,10 @@
-#include "src/app/blinker.h"
-#include "src/utils/light_rgb.h"
+#include "src/app/blinker.hpp"
+#include "src/utils/light_rgb.hpp"
 
 static void blinker_handle_timer(void* context);
 
 Blinker* blinker_alloc(FuriEventLoop* event_loop) {
-    Blinker* self = malloc(sizeof(Blinker));
+    Blinker* self = (Blinker*)malloc(sizeof(Blinker));
     self->led_state = 0;
     self->led_color = 0x00ff00;
     self->event_loop = event_loop;

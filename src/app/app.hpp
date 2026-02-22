@@ -1,6 +1,6 @@
 #pragma once
 
-#include <furi/core/string.h>
+#include <string>
 
 #include <gui/gui.h>
 #include <gui/view_dispatcher.h>
@@ -12,11 +12,11 @@
 #include <power/power_service/power.h>
 #include <notification/notification_messages.h>
 
-#include "src/usb/usb.h"
-#include "src/utils/timerpool.h"
-#include "src/app/blinker.h"
-#include "src/app/config.h"
-#include "src/swire/swire_bitbang.h"
+#include "src/usb/usb.hpp"
+#include "src/utils/timerpool.hpp"
+#include "src/app/blinker.hpp"
+#include "src/app/config.hpp"
+#include "src/swire/swire_bitbang.hpp"
 
 typedef enum {
     SwireAppViewVarItemList,
@@ -33,11 +33,11 @@ typedef struct SwireApp {
     TimerPool* timers;
     Blinker* blinker;
 
-    FuriString* message;
-    FuriString* message2;
-    FuriString* command;
-    FuriString* tmp_str1;
-    FuriString* tmp_str2;
+    std::string message;
+    std::string message2;
+    std::string command;
+    std::string tmp_str1;
+    std::string tmp_str2;
 
     uint32_t debug_value;
     uint32_t debug_value_to_show;

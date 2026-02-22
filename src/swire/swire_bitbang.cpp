@@ -1,12 +1,10 @@
-#include "src/usb/usb.h"
-#include "src/utils/global_debug.h"
 #include <stdlib.h>
 #include <furi.h>
 #include <furi_hal_resources.h>
 #include <furi/core/log.h>
-#include "swire_common.h"
-#include "swire_clock.h"
-#include "./swire_bitbang.h"
+#include "./swire_common.hpp"
+#include "./swire_clock.hpp"
+#include "./swire_bitbang.hpp"
 
 #define _ENOUGH_CYCLES_TO_TRANSLATE_SAMPLE_BUFFER_OF_20 320
 #define _PRECALCULATE_SAMPLE_TRANSLATE                  1
@@ -36,7 +34,7 @@ void swire_bitbang_global_log_params() {
 }
 
 SwireBitbang* swire_bitbang_alloc_with_sws(const IoPins sws) {
-    SwireBitbang* swire = malloc(sizeof(SwireBitbang));
+    SwireBitbang* swire = (SwireBitbang*)malloc(sizeof(SwireBitbang));
     _swire_bitbang_init_with_sws(swire, sws);
     return swire;
 }
@@ -221,7 +219,8 @@ int32_t swire_bitbang_byte_read(SwireBitbang* self) {
     uint32_t pino_set1 = pin_sws_o->pin;
     uint32_t pino_set0 = pin_sws_o->pin << GPIO_NUMBER;
     uint32_t buffer = 0;
-    int32_t samples[2] = {0, (int32_t)bittimecyc * 0.2};
+    int32_t sample1 = (int32_t)bittimecyc * 0.2;
+    int32_t samples[2] = {0, sample1};
     uint32_t ticks[18];
 
     swire_bitbang_timer_join(self);
@@ -285,6 +284,6 @@ halt_abrupt_timeout:
     return -1;
 }
 
-SWIRE_INLINE bool swire_bitbang_has_error(SwireBitbang* swire) {
+bool swire_bitbang_has_error(SwireBitbang* swire) {
     return swire->error != SwireBitbangErrorNone;
 }

@@ -1,7 +1,7 @@
 #include <furi.h>
 #include <furi_hal.h>
 
-#include "src/utils/light_rgb.h"
+#include "src/utils/light_rgb.hpp"
 
 void light_rgb_set(uint32_t color) {
     furi_hal_light_set(LightRed, (color >> 16) & 0xff);

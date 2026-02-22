@@ -1,6 +1,6 @@
 #include <furi.h>
 #include <string.h>
-#include "ringbuffer.h"
+#include "./ringbuffer.hpp"
 
 #define _INLINE __attribute__((always_inline)) inline
 
@@ -10,7 +10,7 @@ _INLINE static uint32_t min_u32(uint32_t a, uint32_t b) {
 
 void ringbuffer_init(struct RingBuffer* self, uint32_t capacity) {
     self->buffer.size = capacity;
-    self->buffer.ptr = malloc(capacity);
+    self->buffer.ptr = (uint8_t*)malloc(capacity);
     furi_check(self->buffer.ptr);
     self->head = 0;
     self->tail = 0;
@@ -22,7 +22,7 @@ void ringbuffer_deinit(RingBuffer* self) {
 }
 
 RingBuffer* ringbuffer_alloc(uint32_t capacity) {
-    RingBuffer* self = malloc(sizeof(RingBuffer));
+    RingBuffer* self = (RingBuffer*)malloc(sizeof(RingBuffer));
     furi_check(self);
     ringbuffer_init(self, capacity);
     return self;
@@ -153,7 +153,7 @@ uint32_t ringbuffer_get_current_length(const RingBuffer* self) {
 uint32_t ringbuffer_resize(RingBuffer* self, uint32_t new_capacity) {
     if(new_capacity == 0) return 0;
 
-    uint8_t* new_buffer = malloc(new_capacity);
+    uint8_t* new_buffer = (uint8_t*)malloc(new_capacity);
     if(!new_buffer) return 0;
 
     uint32_t to_copy = min_u32(self->size, new_capacity);

@@ -1,5 +1,5 @@
 #include <furi.h>
-#include "timerpool.h"
+#include "./timerpool.hpp"
 
 struct TimerPool {
     FuriEventLoop* event_loop;
@@ -19,10 +19,10 @@ struct TimerListItem {
 static void timerpool_handle_timer(void* context);
 
 TimerPool* timerpool_alloc(FuriEventLoop* event_loop) {
-    TimerPool* pool = malloc(sizeof(TimerPool));
+    TimerPool* pool = (TimerPool*)malloc(sizeof(TimerPool));
     furi_check(pool);
     pool->event_loop = event_loop;
-    TimerHandle* item = malloc(sizeof(TimerHandle));
+    TimerHandle* item = (TimerHandle*)malloc(sizeof(TimerHandle));
     furi_check(item);
     item->timer = NULL;
     item->next = item;
@@ -53,7 +53,7 @@ void timerpool_submit(
     FuriEventLoopTimerType type,
     FuriEventLoopTimerCallback callback,
     void* context) {
-    TimerHandle* item = malloc(sizeof(TimerHandle));
+    TimerHandle* item = (TimerHandle*)malloc(sizeof(TimerHandle));
     furi_check(item);
     item->pool = pool;
     item->type = type;

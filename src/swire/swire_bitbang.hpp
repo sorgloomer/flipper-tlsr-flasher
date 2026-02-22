@@ -1,7 +1,7 @@
 #pragma once
 
 #include <furi.h>
-#include "src/swire/swire_common.h"
+#include "src/swire/swire_common.hpp"
 
 typedef enum {
     SwireBitbangRwWrite = 0,

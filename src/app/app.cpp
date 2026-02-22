@@ -1,16 +1,18 @@
-#include "src/app/config.h"
+#include "src/app/config.hpp"
 #include <gui/view_dispatcher.h>
 
 #include <power/power_service/power.h>
 #include <input/input.h>
 
-#include "src/app/app.h"
-#include "src/app/blinker.h"
-#include "src/swire/swire_clock.h"
-#include "src/utils/global_debug.h"
-#include "src/commands/commands.h"
+#include "src/app/app.hpp"
+#include "src/app/blinker.hpp"
+#include "src/swire/swire_clock.hpp"
+#include "src/utils/global_debug.hpp"
+#include "src/utils/str_printf.hpp"
+#include "src/commands/commands.hpp"
 
-#include "src/scenes/swire_scene.h"
+#include "src/scenes/swire_scene.hpp"
+#include "src/furi/errors.hpp"
 
 static void handle_usb_event(FuriEventLoopObject* object, void* context);
 static void loop_iteration(SwireApp* app);
@@ -30,7 +32,7 @@ const GpioPin* const pin_back = &gpio_button_back;
 SwireApp* global_app = NULL;
 
 SwireApp* app_alloc() {
-    SwireApp* self = malloc(sizeof(SwireApp));
+    SwireApp* self = (SwireApp*)malloc(sizeof(SwireApp));
     furi_check(self, "app_alloc");
 
     self->running = true;
@@ -39,19 +41,14 @@ SwireApp* app_alloc() {
 
     self->config = swire_config_alloc();
 
-    self->message = furi_string_alloc();
-    self->message2 = furi_string_alloc();
-    self->tmp_str1 = furi_string_alloc();
-    self->tmp_str2 = furi_string_alloc();
-    self->command = furi_string_alloc();
     self->last_tick = swire_clock_get_cycclk();
     self->view_dispatcher = view_dispatcher_alloc();
     self->event_loop = view_dispatcher_get_event_loop(self->view_dispatcher);
     self->timers = timerpool_alloc(self->event_loop);
     self->blinker = blinker_alloc(self->event_loop);
 
-    self->gui = furi_record_open(RECORD_GUI);
-    self->power = furi_record_open(RECORD_POWER);
+    self->gui = (Gui*)furi_record_open(RECORD_GUI);
+    self->power = (Power*)furi_record_open(RECORD_POWER);
 
     FURI_LOG_T("swire", "app_alloc checkpoint 5");
     FURI_LOG_T("swire", "app_alloc checkpoint 6");
@@ -59,7 +56,7 @@ SwireApp* app_alloc() {
     self->scene_manager = scene_manager_alloc(&swire_app_scene_handlers, self);
     FURI_LOG_T("swire", "app_alloc checkpoint 7");
     self->widget = widget_alloc();
-    self->notifications = furi_record_open(RECORD_NOTIFICATION);
+    self->notifications = (NotificationApp*)furi_record_open(RECORD_NOTIFICATION);
     self->dialog = dialog_ex_alloc();
 
     FURI_LOG_T("swire", "app_alloc checkpoint 8");
@@ -117,11 +114,6 @@ void app_free(SwireApp* self) {
     timerpool_free(self->timers);
     view_dispatcher_free(self->view_dispatcher);
     // furi_event_loop_free(self->event_loop); // owned and freed by view_dispatcher
-    furi_string_free(self->message);
-    furi_string_free(self->message2);
-    furi_string_free(self->tmp_str1);
-    furi_string_free(self->tmp_str2);
-    furi_string_free(self->command);
     // furi_event_loop_unsubscribe(self->event_loop, self->queue);
     // furi_message_queue_free(self->queue);
 
@@ -132,19 +124,19 @@ void app_free(SwireApp* self) {
 
 static bool app_custom_event_callback(void* context, uint32_t event) {
     furi_assert(context);
-    SwireApp* app = context;
+    SwireApp* app = (SwireApp*)context;
     return scene_manager_handle_custom_event(app->scene_manager, event);
 }
 
 static bool app_back_event_callback(void* context) {
     furi_assert(context);
-    SwireApp* app = context;
+    SwireApp* app = (SwireApp*)context;
     return scene_manager_handle_back_event(app->scene_manager);
 }
 
 static void app_tick_event_callback(void* context) {
     furi_assert(context);
-    SwireApp* app = context;
+    SwireApp* app = (SwireApp*)context;
     scene_manager_handle_tick_event(app->scene_manager);
 }
 
@@ -208,14 +200,14 @@ void app_set_timer(
 
 static void handle_usb_event(FuriEventLoopObject* object, void* context) {
     UNUSED(object);
-    SwireApp* app = context;
+    SwireApp* app = (SwireApp*)context;
     FuriEventFlag* flag = swire_usb_get_event_flag_rx(app->usb);
-    SwUsbRxEvent events = furi_event_flag_clear(flag, SwUsbRxEventAll);
+    SwUsbRxEvent events = (SwUsbRxEvent)furi_event_flag_clear(flag, SwUsbRxEventAll);
     // events result had the TxComplete flag even though it is not submitted to furi_event_flag_clear
     // clear seems to return all old flags, keep just the ones we care about
     global_debug()->evt_t++;
 
-    if(events & FuriFlagError) {
+    if((uint32_t)events & FuriFlagError) {
         global_debug()->err_loc = 41;
         global_debug()->err = events;
         return; // TODO
@@ -282,7 +274,7 @@ static void app_handle_periodic_debug_info(SwireApp* app) {
 
 static void app_handle_cdc_state_changed(void* ctx, SwireUsb* sender, CdcState state) {
     UNUSED(sender);
-    SwireApp* app = ctx;
+    SwireApp* app = (SwireApp*)ctx;
     switch(state) {
     case CdcStateConnected:
         app_set_blinker_state(app, BlinkerStateConnected);
@@ -303,7 +295,7 @@ static void app_handle_cdc_state_changed(void* ctx, SwireUsb* sender, CdcState s
 void app_set_message(SwireApp* app, const char* format, ...) {
     va_list args;
     va_start(args, format);
-    furi_string_vprintf(app->message, format, args);
+    str_vprintf(app->message, format, args);
     va_end(args);
     //view_port_update(app->view_port); // TODO
 }
@@ -317,8 +309,8 @@ static void app_handle_rx_one(SwireApp* app) {
     // available flag
     furi_event_flag_set(flag, SwUsbRxEventRxAvailable);
     FuriStatus status = swire_usb_readline_str(app->usb, app->command);
-    furi_string_printf(app->message, "rls %08x", status);
-    if(status & FuriFlagError) {
+    str_printf(app->message, "rls %08x", status);
+    if(furi_status_is_error(status)) {
         global_debug()->err_loc = 31;
         global_debug()->err = status;
     } else {
@@ -328,7 +320,7 @@ static void app_handle_rx_one(SwireApp* app) {
 
 static void app_send_welcome(SwireApp* app) {
     FuriStatus status = swire_usb_printf_ln(app->usb, "swire_demo welcome v%s", APP_VERSION);
-    if(status & FuriFlagError) {
+    if(furi_status_is_error(status)) {
         switch(status) {
         case FuriStatusErrorTimeout:
             app_set_message(app, "tx timeout");
@@ -350,7 +342,7 @@ void app_usb_printf_ln(SwireApp* self, const char* format, ...) {
     furi_check(self->usb, "swire app->usb");
     va_list args;
     va_start(args, format);
-    furi_string_vprintf(self->tmp_str1, format, args);
+    str_vprintf(self->tmp_str1, format, args);
     va_end(args);
     swire_usb_writeline_str(self->usb, self->tmp_str1);
 }

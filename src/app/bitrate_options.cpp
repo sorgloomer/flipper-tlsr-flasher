@@ -1,7 +1,7 @@
 
 #include <stdint.h>
 
-#include "src/app/bitrate_options.h"
+#include "src/app/bitrate_options.hpp"
 
 /*
 import math
