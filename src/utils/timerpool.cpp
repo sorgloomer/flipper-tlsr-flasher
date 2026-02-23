@@ -3,87 +3,77 @@
 #include "src/furi/duration.hpp"
 #include "src/buildconf.hpp"
 
-static void timerpool_handle_timer(void* context);
-static void timerhandle_cancel_and_delete(void* context);
-
-TimerPool::TimerPool(FuriEventLoop* event_loop) {
-    this->event_loop = event_loop;
-    TimerHandle* item = new TimerHandle();
-    furi_check(item);
-    item->timer = nullptr;
-    item->next = item;
-    item->prev = item;
-    this->head = item;
-}
-
-TimerPool::~TimerPool() {
-    FURI_LOG_I(TAG, "TimerPool::~TimerPool checkpoint 1");
-    TimerHandle* item = this->head->next;
-    int i = 0;
-    while(item != this->head) {
-        i++;
-        TimerHandle* next = item->next;
-        furi_event_loop_timer_free(item->timer);
-        delete item;
-        item = next;
-    }
-    FURI_LOG_I(TAG, "timerpool_free items %d", i);
-    delete this->head;
-}
-
-void TimerPool::submit(
-    furi::u32ms timeout,
+__timerpool::handle_t __timerpool::submit(
+    TimerPool* pool,
+    furi::u32ms interval,
     FuriEventLoopTimerType type,
-    FuriEventLoopTimerCallback callback,
-    void* context) {
-    TimerHandle* item = new TimerHandle();
-    furi_check(item);
-    item->pool = this;
-    item->type = type;
-    item->callback = callback;
-    item->context = context;
-    item->timer =
-        furi_event_loop_timer_alloc(this->event_loop, timerpool_handle_timer, type, item);
+    __timerpool::callback_t&& callback) {
+    auto handle = std::make_shared<TimerHandle>(pool, type, nullptr, std::move(callback));
 
-    item->prev = this->head->prev;
-    item->next = this->head;
-    item->next->prev = item;
-    item->prev->next = item;
-    furi_event_loop_timer_start(item->timer, timeout.count());
+    auto event_loop = __timerpool::access_event_loop(pool);
+    auto timer =
+        furi_event_loop_timer_alloc(event_loop, __timerpool::invoke_callback, type, handle.get());
+    handle->timer = timer;
+    auto& timers = __timerpool::access_timers(pool);
+    timers.insert(timers.end(), handle);
+    furi_event_loop_timer_start(timer, interval.count());
+    return handle;
 }
 
-FuriEventLoopTimer* TimerHandle::get_raw_timer() {
-    return this->timer;
+void TimerPool::remove_timer(TimerHandle* timer) {
+    handle_t ptimer(timer);
+    auto& timers = this->timers;
+    auto begin = timers.begin(), end = timers.end();
+    auto result = std::find(begin, end, ptimer);
+    if(result != end) {
+        timers.erase(result);
+    }
 }
 
-void TimerHandle::cancel() {
-    TimerHandle* prev = this->prev;
-    TimerHandle* next = this->next;
-    prev->next = next;
-    next->prev = prev;
-    furi_event_loop_timer_free(this->timer);
+void __timerpool::invoke(TimerHandle* handle) {
+    SW_DEBUG_TRACE(
+        "__timerpool::invoke 1 - %d %lx", (int)(handle->callback != nullptr), (uint32_t)handle);
+    auto pool = handle->pool;
+    pool->currently_running = handle;
+
+    handle->invoke();
+    if(handle->type == FuriEventLoopTimerTypeOnce) {
+        __timerpool::cancel(handle);
+    }
+    pool->currently_running = nullptr;
+}
+
+void __timerpool::invoke_callback(void* context) {
+    __timerpool::invoke(static_cast<TimerHandle*>(context));
+}
+
+void __timerpool::cancel(TimerHandle* handle) {
+    auto pool = handle->pool;
+    if(handle == pool->currently_running) {
+        // TODO: EventLoopTimers have a bug, removing it inside its own callback
+        //   causes the next scheduled timer to skip
+    }
+    handle->internal_destroy();
+    handle->pool->remove_timer(handle);
+}
+
+void TimerHandle::internal_destroy() {
+    SW_DEBUG_TRACE("TimerHandle::internal_destroy 1");
+    if(this->timer != nullptr) {
+        SW_DEBUG_TRACE("TimerHandle::internal_destroy 2");
+        furi_event_loop_timer_free(this->timer);
+    }
     this->timer = nullptr;
     this->callback = nullptr;
-    this->context = nullptr;
-    this->prev = nullptr;
-    this->next = nullptr;
 }
 
-static void timerpool_handle_timer(void* context) {
-    TimerHandle* item = static_cast<TimerHandle*>(context);
-    if(item->callback != nullptr) {
-        item->callback(item->context);
-    }
-    if(item->type == FuriEventLoopTimerTypeOnce) {
-        furi_event_loop_pend_callback( // TODO check if delay is needed. Yes, it is needed, because the furi kernel is not prepared for this
-            item->pool->get_raw_event_loop(),
-            timerhandle_cancel_and_delete,
-            item);
-    }
+FuriEventLoop*& __timerpool::access_event_loop(TimerPool* pool) {
+    return pool->event_loop;
+}
+std::vector<__timerpool::handle_t>& __timerpool::access_timers(TimerPool* pool) {
+    return pool->timers;
 }
 
-static void timerhandle_cancel_and_delete(void* context) {
-    auto handle = static_cast<TimerHandle*>(context);
-    handle->cancel();
-    delete handle;
+TimerHandle::~TimerHandle() {
+    this->internal_destroy();
 }

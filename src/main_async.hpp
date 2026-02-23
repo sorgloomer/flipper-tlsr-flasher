@@ -6,11 +6,11 @@
 
 using namespace std::chrono_literals;
 
-struct task {
+struct coroutine {
 public:
     struct promise_type {
-        task get_return_object() {
-            return task(std::coroutine_handle<promise_type>::from_promise(*this));
+        coroutine get_return_object() {
+            return coroutine(std::coroutine_handle<promise_type>::from_promise(*this));
         }
         std::suspend_never initial_suspend() {
             return {};
@@ -26,21 +26,21 @@ public:
 
     std::coroutine_handle<promise_type> handle;
 
-    ~task() {
-        FURI_LOG_I(TAG, "checkpoint ~task");
+    ~coroutine() {
+        SW_DEBUG_TRACE("~task 1");
         this->destroy();
     }
 
-    task(std::coroutine_handle<promise_type> handle)
+    coroutine(std::coroutine_handle<promise_type> handle)
         : handle(handle) {
     }
-    task& operator=(task&& other) noexcept {
-        this->~task();
+    coroutine& operator=(coroutine&& other) noexcept {
+        this->~coroutine();
         this->handle = other.handle;
         other.handle = nullptr;
         return *this;
     }
-    task(task&& other) noexcept {
+    coroutine(coroutine&& other) noexcept {
         *this = std::move(other);
     }
     void destroy() {
@@ -56,9 +56,9 @@ struct Implicits {
     SwireApp* app;
 
     ~Implicits() {
-        FURI_LOG_I(TAG, "checkpoint ~Implicits");
+        SW_DEBUG_TRACE("~Implicits 1");
     }
 };
 
-auto delay(Implicits* timerpool, furi::u32ms delay);
-task main_async(Implicits* timerpool);
+auto delay(Implicits* implicits, furi::u32ms delay);
+coroutine main_async(Implicits* implicits);

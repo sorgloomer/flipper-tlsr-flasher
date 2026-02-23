@@ -16,11 +16,9 @@ auto delay(Implicits* implicits, furi::u32ms delay) {
         }
         void await_suspend(std::coroutine_handle<> h) {
             this->handle = h;
-            timerpool->submit(
-                delay,
-                FuriEventLoopTimerTypeOnce,
-                [](void* h) { static_cast<std::coroutine_handle<>*>(h)->resume(); },
-                (void*)&this->handle);
+            timerpool->submit(delay, FuriEventLoopTimerTypeOnce, [this]() {
+                this->handle.resume();
+            });
         }
         void await_resume() {
         }
@@ -32,9 +30,9 @@ auto delay(Implicits* implicits, furi::u32ms delay) {
     return awaitable{.timerpool = implicits->timers, .delay = delay};
 }
 
-task main_async(Implicits* implicits) {
+coroutine main_async(Implicits* implicits) {
     for(int i = 0;; i++) {
-        co_await delay(implicits, 5ms);
         FURI_LOG_I(TAG, "from async counter %d", i);
+        co_await delay(implicits, 5ms);
     }
 }

@@ -82,11 +82,11 @@ void app_set_blinker(SwireApp* app, uint32_t color, furi::u32ms interval);
 void app_set_blinker_state(SwireApp* app, BlinkerState state);
 
 void app_set_message(SwireApp* app, const char* format, ...);
-void app_set_timer(
-    SwireApp* app,
-    furi::u32ms interval,
-    FuriEventLoopTimerType type,
-    SwireAppCallback callback);
+
+template <typename F>
+void app_set_timer(SwireApp* app, furi::u32ms interval, FuriEventLoopTimerType type, F&& callback) {
+    app->timers->submit(interval, type, callback);
+}
 
 void app_usb_printf_ln(SwireApp* self, const char* format, ...);
 
