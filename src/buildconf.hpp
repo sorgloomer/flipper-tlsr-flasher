@@ -10,7 +10,8 @@
 #define SW_IMAGE_LEN       144000 // 16
 
 #if SW_CHECKPPOINT_TRACES
-#define SW_DEBUG_TRACE(...) FURI_LOG_T(TAG, "checkpoint " __VA_ARGS__)
+#define SW_DEBUG_TRACE(format, ...) \
+    FURI_LOG_D(TAG, "checkpoint %s " format, __func__, ##__VA_ARGS__)
 #else
 #define SW_DEBUG_TRACE(...)
 #endif

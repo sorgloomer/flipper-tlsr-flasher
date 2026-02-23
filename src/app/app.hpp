@@ -84,8 +84,13 @@ void app_set_blinker_state(SwireApp* app, BlinkerState state);
 void app_set_message(SwireApp* app, const char* format, ...);
 
 template <typename F>
-void app_set_timer(SwireApp* app, furi::u32ms interval, FuriEventLoopTimerType type, F&& callback) {
-    app->timers->submit(interval, type, callback);
+void app_set_timer(
+    SwireApp* app,
+    furi::u32ms interval,
+    FuriEventLoopTimerType type,
+    F&& callback,
+    const char* debug) {
+    app->timers->submit(interval, type, callback, debug);
 }
 
 void app_usb_printf_ln(SwireApp* self, const char* format, ...);

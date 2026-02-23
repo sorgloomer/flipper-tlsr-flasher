@@ -16,9 +16,11 @@ auto delay(Implicits* implicits, furi::u32ms delay) {
         }
         void await_suspend(std::coroutine_handle<> h) {
             this->handle = h;
-            timerpool->submit(delay, FuriEventLoopTimerTypeOnce, [this]() {
-                this->handle.resume();
-            });
+            timerpool->submit(
+                delay,
+                FuriEventLoopTimerTypeOnce,
+                [this]() { this->handle.resume(); },
+                "delay await_suspend");
         }
         void await_resume() {
         }
@@ -31,8 +33,24 @@ auto delay(Implicits* implicits, furi::u32ms delay) {
 }
 
 coroutine main_async(Implicits* implicits) {
+    co_await delay(implicits, 1000ms);
+
+#if 0
+    {
+        FURI_LOG_I(TAG, "Beta submitting");
+        auto t1 = implicits->app->timers->submit(
+            1000ms, FuriEventLoopTimerTypeOnce, []() { FURI_LOG_I(TAG, "Beta fired"); }, "beta");
+        FURI_LOG_I(TAG, "Beta submitted");
+        co_await delay(implicits, 500ms);
+        FURI_LOG_I(TAG, "Beta delay");
+        t1->cancel();
+        FURI_LOG_I(TAG, "Beta canceled");
+    }
+    FURI_LOG_I(TAG, "Beta destroyed");
+#endif
+
     for(int i = 0;; i++) {
         FURI_LOG_I(TAG, "from async counter %d", i);
-        co_await delay(implicits, 5ms);
+        co_await delay(implicits, 1000ms);
     }
 }

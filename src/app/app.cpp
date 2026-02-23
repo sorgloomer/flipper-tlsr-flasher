@@ -92,10 +92,18 @@ SwireApp::SwireApp()
     scene_manager_next_scene(this->scene_manager, SwireSceneStart);
 
     SW_DEBUG_TRACE("app_alloc 11");
-    app_set_timer(this, 50ms, FuriEventLoopTimerTypePeriodic, [this]() { loop_iteration(this); });
-    app_set_timer(this, 250ms, FuriEventLoopTimerTypePeriodic, [this]() {
-        app_handle_periodic_debug_info(this);
-    });
+    app_set_timer(
+        this,
+        200ms,
+        FuriEventLoopTimerTypePeriodic,
+        [this]() { loop_iteration(this); },
+        "loop_iteration");
+    app_set_timer(
+        this,
+        500ms,
+        FuriEventLoopTimerTypePeriodic,
+        [this]() { app_handle_periodic_debug_info(this); },
+        "app_handle_periodic_debug_info");
 
     SW_DEBUG_TRACE("app_alloc 12");
     app_set_blinker_state(this, BlinkerStateIdle);
@@ -297,7 +305,12 @@ static void app_handle_cdc_state_changed(void* ctx, SwireUsb* sender, CdcState s
     case CdcStateConnected:
         app_set_blinker_state(app, BlinkerStateConnected);
         app_set_message(app, "cdc connected");
-        app_set_timer(app, 1000ms, FuriEventLoopTimerTypeOnce, [app]() { app_send_welcome(app); });
+        app_set_timer(
+            app,
+            1000ms,
+            FuriEventLoopTimerTypeOnce,
+            [app]() { app_send_welcome(app); },
+            "app_send_welcome");
         break;
     case CdcStateDisconnected:
         app_set_blinker_state(app, BlinkerStateIdle);
