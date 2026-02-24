@@ -7,9 +7,12 @@ import serial.tools.list_ports
 from subprocess import check_call as run
 import argparse
 from contextlib import ExitStack
+from dataclasses import dataclass
+import threading
 
 SW_MAX_IMAGE_LEN = 512 * 1024
-SW_CHUNK_SIZE = 256
+
+TLSR_FLASH_CHUNK_SIZE = 256
 TLSR_FLASH_SECTOR_SIZE = 4096
 TLSR_FLASH_CMD_INITIATE_READ = 0x00
 TLSR_FLASH_CMD_WRITE = 0x02
@@ -52,9 +55,10 @@ def build_argparse():
     parser.add_argument("--erase", type=int, default=None)
     parser.add_argument("--length", type=int, default=0)
     parser.add_argument("--addr", type=int, default=0)
-    parser.add_argument("--bitrate", type=int, default=75000)
+    parser.add_argument("--bitrate", type=int, default=150000)
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--reset-duration", type=int, default=500)
+    parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False)
     return parser
 
 
@@ -100,7 +104,7 @@ def flash(args):
         addr = 0
         meter.restart()
         while addr < flash_length:
-            chunksize = min(SW_CHUNK_SIZE, flash_length - addr)
+            chunksize = min(TLSR_FLASH_CHUNK_SIZE, flash_length - addr)
             buf = f.read(chunksize)
             print(f"Writing {len(buf):x}/{chunksize:x}/{flash_length:x} to flash")
             device.flash.mspi_send_data(buf)
@@ -131,17 +135,82 @@ def dump(args):
             os.makedirs(".dumps", exist_ok=True)
             outfilepath = f".dumps/dump-{ts}.bin"
         f = stack.enter_context(open(outfilepath, "wb"))
+
+        stack.enter_context(ConfigTimeoutContext(device.swire, 5))
         meter.restart()
-        for addr in range(0, dump_length, SW_CHUNK_SIZE):
-            buf = device.flash.read(SW_CHUNK_SIZE)
-            if device.swire.debug:
-                for chunk in chunks(buf, 32):
-                    print(f"DUMP {addr:06x}: {chunk[0:16].hex()}  {chunk[16:32].hex()}")
-                    addr += 32
-            if args.short and all(x == 0xFF for x in buf):
+
+        control = Box("running")
+        semaphore = threading.Semaphore(2)
+
+        def commander_thread():
+            swire = device.swire
+            for addr in range(0, dump_length, TLSR_FLASH_CHUNK_SIZE):
+                if control.value != "running":
+                    if args.debug:
+                        print(f"[d] dump stop because not running: {control.value!r}")
+                    break
+                semaphore.acquire(timeout=5)
+                swire.write_raw_cmd(
+                    b"".join(
+                        [
+                            # set flash read command, assume fifo mode
+                            f"trw {REG_SPI_DATA:x} {swire.slave_id:x} 4\n".encode(
+                                "utf-8"
+                            ),
+                            bigendian_encode(TLSR_FLASH_CMD_READ, 1),
+                            bigendian_encode(addr, 3),
+                            # wait for flash ready
+                            b"wfr\n",
+                            # initiate read chunk
+                            f"trr {REG_SPI_DATA:x} {swire.slave_id:x} {TLSR_FLASH_CHUNK_SIZE:x}\n".encode(
+                                "utf-8"
+                            ),
+                        ]
+                    )
+                )
+            swire.write_raw_cmd(f"ping\n", comment="dump")
+
+        thread = threading.Thread(target=commander_thread)
+        thread.start()
+        addr = 0
+        while True:
+            line = device.swire.readline()
+            if line == "pong":
+                if args.debug:
+                    print(f"[d] dump pong received")
+                control.value = "had_pong"
                 break
-            f.write(buf)
-            meter.add_batch(len(buf))
+            elif line.startswith("data "):
+                if args.debug:
+                    print(f"[d] dump data received")
+                datalen = int(line[5:], 16)
+                data = device.swire.serial.read(datalen)
+                assert len(data) == datalen
+                if device.swire.debug:
+                    addr2 = addr
+                    for chunk in chunks(data, 32):
+                        print(
+                            f"DUMP {addr2:06x}: {chunk[0:16].hex()}  {chunk[16:32].hex()}"
+                        )
+                        addr2 += 32
+                if args.short and all(x == 0xFF for x in data):
+                    control.value = "all_ff"
+                    break
+                f.write(data)
+                meter.add_batch(len(data))
+                addr += len(data)
+                semaphore.release()
+            elif line != "ok":
+                print(f"[E] error in read loop: {line}")
+                raise Exception(f"error in read loop: {line}")
+
+        if control.value == "running":
+            control.value = "stop_end_reached"
+        if args.debug:
+            print(f"[d] transfer stopped, control={control.value}")
+        if control.value != "had_pong":
+            device.swire.readlines_until("pong")
+        thread.join()
 
     print(f"[i] dumped {meter.humantotal()}")
 
@@ -183,7 +252,7 @@ class TlsrDevice(ClosingMixin):
             self.swire_owned = True
         self.args = args
         self.swire = swire
-        self.cpu = TlsrCpu(self.swire)
+        self.cpu = TlsrCpu825x(self.swire)
         self.flash = TlsrFlash(self.swire, self.cpu)
 
     def close(self):
@@ -192,16 +261,30 @@ class TlsrDevice(ClosingMixin):
 
     def reset(self):
         self.swire.write_raw_cmd(f"reset 70 {self.args.reset_duration}\n")
-        if self.swire.readline() != "ok":
-            raise Exception()
+        response = self.swire.readline()
+        if response != "ok":
+            raise Exception(f"reset failed, response was: {response}")
 
     def do_sanity_check(self):
-        self.swire.ping_sync()
-        self.swire.transaction_write(0x00B2, b"\x7f")  # b0-b4 SWIRE
-        sanity_check = self.swire.transaction_read(0x00B2, 1)  # b0-b4 SWIRE
-        print(f"[i] sanity_check: {sanity_check.hex()}")
-        if sanity_check != b"\x7f":
-            raise Exception(f"[E] sanity_check failed {sanity_check.hex()}")
+        self.swire.ping_sync("sanity_check")
+        swire_clk_div = self.cpu.register(TlsrCpu825x.Regs.SWIRE_CLK_DIV)
+
+        swire_clk_div.write(0x7F)
+        sanity_check = swire_clk_div.read()
+        print(f"[i] sanity_check 0x7f: {sanity_check:02x}")
+        if sanity_check != 0x7F:
+            raise Exception(f"[E] sanity_check failed {sanity_check:02x}")
+
+    def do_set_swire_clock(self):
+        swire_clk_div = self.cpu.register(TlsrCpu825x.Regs.SWIRE_CLK_DIV)
+        swire_clk_div_value = int(round(9500000 / self.args.bitrate))
+        print(f"[i] set swire clock divider to: {swire_clk_div_value:02x}")
+        swire_clk_div.write(swire_clk_div_value)
+        sanity_check = swire_clk_div.read()
+        if sanity_check != swire_clk_div_value:
+            raise Exception(
+                f"[E] failed to set slave swire clock divider {sanity_check:02x}"
+            )
 
     def with_common_setup(self, stack):
         self.swire.check_programmer()
@@ -209,14 +292,38 @@ class TlsrDevice(ClosingMixin):
         self.reset()
         self.cpu.stop()
         self.do_sanity_check()
+        self.do_set_swire_clock()
         stack.enter_context(self.cpu.with_transaction_mode(DontCare))
         stack.enter_context(self.flash.with_cs(DontCare))
+        cpu_metadata = self.cpu.read_cpu_metadata()
+        print(f"[i] {cpu_metadata}")
 
 
-class TlsrCpu:
+@dataclass(frozen=True)
+class RegisterMetadata:
+    bytecount: int
+    address: int
+
+
+class TlsrCpu825x:
+    class Regs:
+        VER_ID = RegisterMetadata(bytecount=1, address=0x7D)
+        PROG_ID = RegisterMetadata(bytecount=2, address=0x7E)
+        SWIRE_CLK_DIV = RegisterMetadata(bytecount=1, address=0xB2)  # b0-b4 SWIRE
+
     def __init__(self, swire):
         self.swire = swire
         self.transaction_mode = MaybeDontCareState("mem")
+
+    def register(self, regmeta):
+        return BoundRegister(self.swire, regmeta)
+
+    def read_cpu_metadata(self):
+        return CpuMetadata(
+            ver_id=self.register(TlsrCpu825x.Regs.VER_ID).read(),
+            prog_id=self.register(TlsrCpu825x.Regs.PROG_ID).read(),
+            swire_clk_div=self.register(TlsrCpu825x.Regs.SWIRE_CLK_DIV).read(),
+        )
 
     def stop(self):
         self.swire.transaction_write(0x0602, b"\x05")  # CPU Stop
@@ -312,7 +419,7 @@ class TlsrFlash:
         # self.mspi_send_data((addr >> 0) & 0xFF)
 
     def blk_addr(self, addr):
-        return bigendian(addr, 3)
+        return bigendian_encode(addr, 3)
 
     def mspi_start_auto_read(self):
         # MSPI Data, 00 to drive MSPI Clock to initiate first read
@@ -371,22 +478,31 @@ class TlsrFlashCsContext(ClosingMixin):
 
 
 class Swire:
-    def __init__(self, args, serial=None, timeout=None):
+    def __init__(self, args, serial=None, timeout=None, slave_id=None):
         if serial is None:
             serial = fl_open_serial(args)
         if timeout is None:
             timeout = 5
+        if slave_id is None:
+            slave_id = 0
         self.serial = serial
         self.timeout = timeout
         self.serial.timeout = timeout
-        self.debug = False
+        self.serial.write_timeout = timeout
+        self.debug = args.debug
         self.running = True
+        self.slave_id = slave_id
 
     def consume_until_timeout(self):
-        while True:
-            data = self.serial.read(1)
-            if not data:
-                return
+        leftovers = 0
+        with ConfigTimeoutContext(self.serial, 0.25):
+            while True:
+                data = self.serial.read(1024)
+                if not data:
+                    break
+                leftovers += len(data)
+        if self.debug:
+            print(f"[d] Leftover bytes in input usb buffer: {leftovers}")
 
     def check_programmer(self):
         self.consume_until_timeout()
@@ -395,11 +511,23 @@ class Swire:
         if (line + " ").startswith("swire_demo welcome "):
             line = self.readline()
         if line != "flitswire info response start":
-            print("[E] swire emulator not running")
-            return
+            raise Exception(f"swire emulator not running, got {line}")
         self.readlines_until("end")
 
-    def write_raw_cmd(self, data):
+    def write_raw_cmd(self, data, comment=None):
+        if self.debug:
+            if comment is None:
+                print(f" >  {data!r}")
+            else:
+                print(f" >  {data!r} comment={comment!r}")
+        self._write_raw(data)
+
+    def write_raw_data(self, data):
+        if self.debug:
+            print(f" >  len(data)={len(data)}")
+        self._write_raw(data)
+
+    def _write_raw(self, data):
         if isinstance(data, str):
             data = data.encode("utf-8")
         written = self.serial.write(data)
@@ -409,21 +537,21 @@ class Swire:
 
     def transaction_write(self, addr, data, slave_id=None):
         if slave_id is None:
-            slave_id = 0
+            slave_id = self.slave_id
         if isinstance(data, int):
             data = [data]
         if isinstance(data, list):
             data = bytes(data)
 
         self.write_raw_cmd(f"trw {addr:x} {slave_id:x} {len(data):x}\n")
-        self.write_raw_cmd(data)
-        resp = self.readline(echo=False)
+        self.write_raw_data(data)
+        resp = self.readline()
         if resp != "ok":
-            raise Exception(resp)
+            raise Exception(f"error in write transaction: {resp}")
 
     def transaction_read(self, addr, readlen, slave_id=None, timeout=None):
         if slave_id is None:
-            slave_id = 0
+            slave_id = self.slave_id
         if timeout is None:
             timeout = self.timeout
         self.write_raw_cmd(f"trr {addr:x} {slave_id:x} {readlen:x}\n")
@@ -441,13 +569,10 @@ class Swire:
     def init(self, bitrate):
         self.write_raw_cmd(f"swire_init 3 {bitrate}\n")
 
-    def readline(self, timeout=None, echo=None):
-        if timeout is None:
-            timeout = self.timeout
+    def readline(self, echo=None):
         if echo is None:
             echo = True
 
-        self.serial.timeout = timeout
         while self.is_open_redundant():
             line = self.serial.readline()
             if line is None:
@@ -456,7 +581,7 @@ class Swire:
                 raise Exception("serial timeout")
             line = line.decode("utf-8").rstrip("\r\n")
             if self.debug and echo:
-                print(f" < {line}")
+                print(f"  < {line}")
             if not line.startswith("#"):
                 return line
 
@@ -473,8 +598,8 @@ class Swire:
             return False
         return True
 
-    def ping_sync(self):
-        self.write_raw_cmd(b"ping\n")
+    def ping_sync(self, comment=None):
+        self.write_raw_cmd(b"ping\n", comment=comment)
         self.readlines_until("pong")
 
     def readlines_until(self, marker, echo=None):
@@ -488,7 +613,9 @@ class Swire:
         if not line.startswith("data "):
             raise Exception("Data expected, found: {line}")
         bytecount = int(line[5:], 16)
-        return self.serial.read(bytecount)
+        result = self.serial.read(bytecount)
+        assert len(result) == bytecount
+        return result
 
     def _read_worker(self):
         while self.is_open_redundant():
@@ -508,10 +635,41 @@ class Swire:
                 self.data_queue.put(buffer)
 
 
-def bigendian(number, bytecount):
+@dataclass()
+class CpuMetadata:
+    ver_id: int
+    prog_id: int
+    swire_clk_div: int
+
+
+class BoundRegister:
+    def __init__(self, swire, regmeta):
+        self.swire = swire
+        self.regmeta = regmeta
+
+    def read(self):
+        return bigendian_decode(
+            self.swire.transaction_read(self.regmeta.address, self.regmeta.bytecount)
+        )
+
+    def write(self, value: int):
+        assert 0 <= value < (1 << (8 * self.regmeta.bytecount))
+        self.swire.transaction_write(
+            self.regmeta.address, bigendian_encode(value, self.regmeta.bytecount)
+        )
+
+
+def bigendian_encode(number, bytecount):
     return bytes(
         ((number >> ((bytecount - i - 1) * 8)) & 0xFF) for i in range(bytecount)
     )
+
+
+def bigendian_decode(buf):
+    result = 0
+    for byte in buf:
+        result = (result << 8) | byte
+    return result
 
 
 def fl_open_serial(args):
@@ -556,6 +714,22 @@ class BandwidthCounter:
     def print_report(self, msg):
         span = time.time() - self.pivot
         print(f"[i] {msg} {self.humantotal()} in {span:03f} s")
+
+
+class ConfigTimeoutContext(ClosingMixin):
+    def __init__(self, target, timeout):
+        self.target = target
+        self.new_timeout = timeout
+        self.old_timeout = target.timeout
+        self.target.timeout = self.new_timeout
+
+    def close(self):
+        self.target.timeout = self.old_timeout
+
+
+class Box:
+    def __init__(self, value):
+        self.value = value
 
 
 def humanbytes(x):

@@ -4,6 +4,7 @@
 #include <furi_hal_resources.h>
 
 #include "src/app/app.hpp"
+#include "src/utils/str_printf.hpp"
 #include "src/swire/swire_bitbang.hpp"
 #include "src/commands/commands_pgm.hpp"
 
@@ -48,6 +49,10 @@ bool cmd_pgm(SwireApp* app, std::string& cmd) {
     }
     if(cmd_matches(cmd, "trr")) {
         cmd_pgm_transaction_read(app, cargs);
+        return true;
+    }
+    if(cmd_matches(cmd, "wfr")) {
+        cmd_pgm_wait_flash_ready(app, cargs);
         return true;
     }
 
@@ -268,6 +273,37 @@ void cmd_pgm_transaction_end(SwireApp* app, const char* cargs) {
 #endif
 }
 
+#define REG_MSPI_DATA               0x000c
+#define REG_MSPI_CONTROL            0x000c
+#define MSPI_FLASH_CMD_GET_STATUS   0x05
+#define MSPI_FLASH_STATUS_FLAG_BUSY 0x01
+
+FuriStatus cmd_pgm_wait_flash_ready(SwireApp* app, const char* cargs) {
+    uint32_t slave_id = 0;
+    int32_t timeout = 1000;
+    sscanf(cargs, "%ld %lx", &slave_id, &timeout);
+    if(timeout < 0) timeout = 1000;
+
+    swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwWrite, slave_id);
+    swire_bitbang_byte_write(app->swire, MSPI_FLASH_CMD_GET_STATUS);
+    swire_bitbang_transaction_end(app->swire);
+    uint32_t timeout_deadline = furi_get_tick() + timeout;
+    for(;;) {
+        swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwRead, slave_id);
+        int32_t data = swire_bitbang_byte_read(app->swire);
+        swire_bitbang_transaction_end(app->swire);
+        if((data & MSPI_FLASH_STATUS_FLAG_BUSY) == 0) {
+            swire_usb_writeline_cstr(app->usb, "ok");
+            return FuriStatusOk;
+        }
+        if((int32_t)(furi_get_tick() - timeout_deadline) > 0) {
+            auto str = str_printf("error timeout flash_status=%ld", data);
+            swire_usb_writeline_str(app->usb, str);
+            return FuriStatusErrorTimeout;
+        }
+    }
+}
+
 FuriStatus cmd_pgm_bytes_write(SwireApp* app, const char* cargs) {
     if(app->usb == NULL) {
         FURI_LOG_E("swire", "cmd_pgm_bytes_write swire->usb not initialized");
@@ -399,7 +435,7 @@ FuriStatus cmd_pgm_reset(SwireApp* app, const char* cargs) {
     furi_delay_ms(reset_duration_ms);
     furi_hal_gpio_write(pin_power, true);
     furi_delay_ms(reset_delay_ms);
-    swire_usb_printf_ln(app->usb, "# reset %ld %ld", reset_delay_ms, reset_duration_ms);
+    // swire_usb_printf_ln(app->usb, "# reset %ld %ld", reset_delay_ms, reset_duration_ms);
     swire_usb_writeline_cstr(app->usb, "ok");
     return FuriStatusOk;
 }
