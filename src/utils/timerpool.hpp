@@ -28,6 +28,7 @@ class TimerPoolTimerHandle {
 
     static void invoke_callback(void* context);
     static void invoke_and_release(TimerPoolTimerHandle* context);
+    void nullify();
 
 public:
     /** for internal use only! */
@@ -53,7 +54,6 @@ public:
     }
 
     void cancel();
-    void nullify();
 
     void invoke() {
         if(callback == nullptr) {
