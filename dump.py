@@ -127,7 +127,7 @@ def dump(args):
         device.flash.mspi_init_read(args.addr)
 
         device.flash.mspi_start_auto_read()
-
+        stack.enter_context(device.cpu.with_fifo())
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         if args.out:
             outfilepath = args.out
@@ -154,11 +154,12 @@ def dump(args):
                     b"".join(
                         [
                             # set flash read command, assume fifo mode
-                            f"trw {REG_SPI_DATA:x} {swire.slave_id:x} 4\n".encode(
+                            f"trw {REG_SPI_DATA:x} {swire.slave_id:x} 5\n".encode(
                                 "utf-8"
                             ),
                             bigendian_encode(TLSR_FLASH_CMD_READ, 1),
                             bigendian_encode(addr, 3),
+                            bigendian_encode(TLSR_FLASH_CMD_INITIATE_READ, 1),
                             # wait for flash ready
                             b"wfr\n",
                             # initiate read chunk
