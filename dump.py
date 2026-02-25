@@ -9,6 +9,9 @@ import argparse
 from contextlib import ExitStack
 from dataclasses import dataclass
 import threading
+import queue
+import concurrent.futures
+from collections import deque
 
 SW_MAX_IMAGE_LEN = 512 * 1024
 
@@ -133,85 +136,43 @@ def dump(args):
             outfilepath = args.out
         else:
             os.makedirs(".dumps", exist_ok=True)
-            outfilepath = f".dumps/dump-{ts}.bin"
+            outfilepath = f".dumps/dump-{ts}-{args.bitrate}bps.bin"
         f = stack.enter_context(open(outfilepath, "wb"))
 
         stack.enter_context(ConfigTimeoutContext(device.swire, 5))
         meter.restart()
 
-        control = Box("running")
-        semaphore = threading.Semaphore(2)
+        chunk_futures = deque()
 
-        def commander_thread():
-            swire = device.swire
-            for addr in range(0, dump_length, TLSR_FLASH_CHUNK_SIZE):
-                if control.value != "running":
-                    if args.debug:
-                        print(f"[d] dump stop because not running: {control.value!r}")
-                    break
-                semaphore.acquire(timeout=5)
-                swire.write_raw_cmd(
-                    b"".join(
-                        [
-                            # set flash read command, assume fifo mode
-                            f"trw {REG_SPI_DATA:x} {swire.slave_id:x} 5\n".encode(
-                                "utf-8"
-                            ),
-                            bigendian_encode(TLSR_FLASH_CMD_READ, 1),
-                            bigendian_encode(addr, 3),
-                            bigendian_encode(TLSR_FLASH_CMD_INITIATE_READ, 1),
-                            # wait for flash ready
-                            b"wfr\n",
-                            # initiate read chunk
-                            f"trr {REG_SPI_DATA:x} {swire.slave_id:x} {TLSR_FLASH_CHUNK_SIZE:x}\n".encode(
-                                "utf-8"
-                            ),
-                        ]
-                    )
-                )
-            swire.write_raw_cmd(f"ping\n", comment="dump")
+        short_end_reached = False
 
-        thread = threading.Thread(target=commander_thread)
-        thread.start()
-        addr = 0
-        while True:
-            line = device.swire.readline()
-            if line == "pong":
-                if args.debug:
-                    print(f"[d] dump pong received")
-                control.value = "had_pong"
-                break
-            elif line.startswith("data "):
-                if args.debug:
-                    print(f"[d] dump data received")
-                datalen = int(line[5:], 16)
-                data = device.swire.serial.read(datalen)
-                assert len(data) == datalen
-                if device.swire.debug:
-                    addr2 = addr
-                    for chunk in chunks(data, 32):
-                        print(
-                            f"DUMP {addr2:06x}: {chunk[0:16].hex()}  {chunk[16:32].hex()}"
-                        )
-                        addr2 += 32
-                if args.short and all(x == 0xFF for x in data):
-                    control.value = "all_ff"
-                    break
+        def consume_chunks(keep=0):
+            nonlocal short_end_reached
+            while len(chunk_futures) > keep:
+                if short_end_reached:
+                    return
+                data = chunk_futures.popleft().result()
+                if args.short and all(b == 0xFF for b in data):
+                    short_end_reached = True
+                    return
                 f.write(data)
                 meter.add_batch(len(data))
-                addr += len(data)
-                semaphore.release()
-            elif line != "ok":
-                print(f"[E] error in read loop: {line}")
-                raise Exception(f"error in read loop: {line}")
 
-        if control.value == "running":
-            control.value = "stop_end_reached"
-        if args.debug:
-            print(f"[d] transfer stopped, control={control.value}")
-        if control.value != "had_pong":
-            device.swire.readlines_until("pong")
-        thread.join()
+        for addr in range(0, dump_length, TLSR_FLASH_CHUNK_SIZE):
+            if short_end_reached:
+                break
+            # device.flash.mspi_init_read(addr)
+            future = device.flash.read(TLSR_FLASH_CHUNK_SIZE)
+            chunk_futures.append(future)
+            # do not wait until the end to show the errors
+            # but do not wait for every roundtrip for speed
+            # keep 5 messages in the pipeline at a time
+            # same for the data chunks, but those are only
+            # a fraction of all messages, enough to keep 2
+            consume_chunks(keep=2)
+            device.swire.peek_wait(keep=5)
+        consume_chunks(keep=0)
+        device.swire.peek_wait()
 
     print(f"[i] dumped {meter.humantotal()}")
 
@@ -262,16 +223,21 @@ class TlsrDevice(ClosingMixin):
 
     def reset(self):
         self.swire.write_raw_cmd(f"reset 70 {self.args.reset_duration}\n")
-        response = self.swire.readline()
-        if response != "ok":
-            raise Exception(f"reset failed, response was: {response}")
+
+        def tail():
+            response = self.swire.readline()
+            if response != "ok":
+                raise Exception(f"reset failed, response was: {response}")
+
+        return self.swire.defer(tail)
 
     def do_sanity_check(self):
         self.swire.ping_sync("sanity_check")
         swire_clk_div = self.cpu.register(TlsrCpu825x.Regs.SWIRE_CLK_DIV)
 
         swire_clk_div.write(0x7F)
-        sanity_check = swire_clk_div.read()
+
+        sanity_check = swire_clk_div.read().result()
         print(f"[i] sanity_check 0x7f: {sanity_check:02x}")
         if sanity_check != 0x7F:
             raise Exception(f"[E] sanity_check failed {sanity_check:02x}")
@@ -281,7 +247,7 @@ class TlsrDevice(ClosingMixin):
         swire_clk_div_value = int(round(9500000 / self.args.bitrate))
         print(f"[i] set swire clock divider to: {swire_clk_div_value:02x}")
         swire_clk_div.write(swire_clk_div_value)
-        sanity_check = swire_clk_div.read()
+        sanity_check = swire_clk_div.read().result()
         if sanity_check != swire_clk_div_value:
             raise Exception(
                 f"[E] failed to set slave swire clock divider {sanity_check:02x}"
@@ -289,14 +255,16 @@ class TlsrDevice(ClosingMixin):
 
     def with_common_setup(self, stack):
         self.swire.check_programmer()
+        self.swire.peek_wait()
         self.swire.init(self.args.bitrate)
         self.reset()
         self.cpu.stop()
+        self.swire.peek_wait()
         self.do_sanity_check()
         self.do_set_swire_clock()
         stack.enter_context(self.cpu.with_transaction_mode(DontCare))
         stack.enter_context(self.flash.with_cs(DontCare))
-        cpu_metadata = self.cpu.read_cpu_metadata()
+        cpu_metadata = self.cpu.read_cpu_metadata().result()
         print(f"[i] {cpu_metadata}")
 
 
@@ -320,17 +288,24 @@ class TlsrCpu825x:
         return BoundRegister(self.swire, regmeta)
 
     def read_cpu_metadata(self):
-        return CpuMetadata(
-            ver_id=self.register(TlsrCpu825x.Regs.VER_ID).read(),
-            prog_id=self.register(TlsrCpu825x.Regs.PROG_ID).read(),
-            swire_clk_div=self.register(TlsrCpu825x.Regs.SWIRE_CLK_DIV).read(),
-        )
+        ver_id = self.register(TlsrCpu825x.Regs.VER_ID).read()
+        prog_id = self.register(TlsrCpu825x.Regs.PROG_ID).read()
+        swire_clk_div = self.register(TlsrCpu825x.Regs.SWIRE_CLK_DIV).read()
+
+        def tail():
+            return CpuMetadata(
+                ver_id=ver_id.result(),
+                prog_id=prog_id.result(),
+                swire_clk_div=swire_clk_div.result(),
+            )
+
+        return LazyValue(tail)
 
     def stop(self):
-        self.swire.transaction_write(0x0602, b"\x05")  # CPU Stop
+        return self.swire.transaction_write(0x0602, b"\x05")  # CPU Stop
 
     def set_fifo_mode(self, value):
-        self.set_transaction_mode("fifo" if value else "mem")
+        return self.set_transaction_mode("fifo" if value else "mem")
 
     def with_transaction_mode(self, mode):
         return TlsrCpuTransactionModeContext(self, mode)
@@ -411,7 +386,8 @@ class TlsrFlash:
 
     def mspi_send_fcmd_addr(self, cmd, addr):
         with self.cpu.with_fifo():
-            print(f"[d] flash.mspi_init_cmd_addr({cmd!r}, 0x{addr:x})")
+            if self.swire.debug:
+                print(f"[d] flash.mspi_init_cmd_addr({cmd!r}, 0x{addr:x})")
             self.mspi_send_data([cmd, *self.blk_addr(addr)])
         # TODO: why not fifo send it in one transaction? seems to be working
         # self.mspi_send_data(cmd)
@@ -493,6 +469,31 @@ class Swire:
         self.debug = args.debug
         self.running = True
         self.slave_id = slave_id
+        self.response_executor = BlockingThreadPoolExecutor(max_workers=1, queue_size=4)
+        self.pending_futures = deque()
+        self._defer_depth = 0
+
+    def peek_wait(self, keep=0):
+        result = None
+        while len(self.pending_futures) > keep:
+            result = self.pending_futures.popleft().result()
+        return result
+
+    def defer(self, fn):
+        future = self.response_executor.submit(fn)
+        self.pending_futures.append(future)
+        return future
+
+    def _defer_ok(self, error_prefix, expected_result=None):
+        if expected_result is None:
+            expected_result = "ok"
+
+        def tail():
+            resp = self.readline()
+            if resp != expected_result:
+                raise Exception(f"{error_prefix}: {resp}")
+
+        return self.defer(tail)
 
     def consume_until_timeout(self):
         leftovers = 0
@@ -508,12 +509,16 @@ class Swire:
     def check_programmer(self):
         self.consume_until_timeout()
         self.write_raw_cmd(b"ga7g4drb info\n")
-        line = self.readline()
-        if (line + " ").startswith("swire_demo welcome "):
+
+        def tail():
             line = self.readline()
-        if line != "flitswire info response start":
-            raise Exception(f"swire emulator not running, got {line}")
-        self.readlines_until("end")
+            if (line + " ").startswith("swire_demo welcome "):
+                line = self.readline()
+            if line != "flitswire info response start":
+                raise Exception(f"swire emulator not running, got {line}")
+            self.readlines_until("end")
+
+        return self.defer(tail)
 
     def write_raw_cmd(self, data, comment=None):
         if self.debug:
@@ -525,7 +530,7 @@ class Swire:
 
     def write_raw_data(self, data):
         if self.debug:
-            print(f" >  len(data)={len(data)}")
+            print(f" >  ::bytes len(data)={len(data)}")
         self._write_raw(data)
 
     def _write_raw(self, data):
@@ -546,9 +551,8 @@ class Swire:
 
         self.write_raw_cmd(f"trw {addr:x} {slave_id:x} {len(data):x}\n")
         self.write_raw_data(data)
-        resp = self.readline()
-        if resp != "ok":
-            raise Exception(f"error in write transaction: {resp}")
+
+        return self._defer_ok("error in transaction_write")
 
     def transaction_read(self, addr, readlen, slave_id=None, timeout=None):
         if slave_id is None:
@@ -557,18 +561,23 @@ class Swire:
             timeout = self.timeout
         self.write_raw_cmd(f"trr {addr:x} {slave_id:x} {readlen:x}\n")
 
-        result = self._readdatamsg()
-        if result is None:
-            raise Exception("connection closed while reading")
-        if len(result) != readlen:
-            raise Exception("could not read enough bytes")
-        status = self.readline()
-        if status != "ok":
-            raise Exception(f"error result from transaction_read: {status}")
-        return result
+        def tail():
+            result = self._readdatamsg()
+            if result is None:
+                raise Exception("connection closed while reading")
+            if len(result) != readlen:
+                raise Exception("could not read enough bytes")
+            status = self.readline()
+            if status != "ok":
+                raise Exception(f"error result from transaction_read: {status}")
+            return result
+
+        return self.defer(tail)
 
     def init(self, bitrate):
+        assert 75000 <= bitrate <= 1000000
         self.write_raw_cmd(f"swire_init 3 {bitrate}\n")
+        return self._defer_ok("error in swire_init")
 
     def readline(self, echo=None):
         if echo is None:
@@ -587,6 +596,7 @@ class Swire:
                 return line
 
     def close(self):
+        self.response_executor.shutdown(wait=True)
         self.running = False
         self.serial.close()
 
@@ -601,7 +611,13 @@ class Swire:
 
     def ping_sync(self, comment=None):
         self.write_raw_cmd(b"ping\n", comment=comment)
-        self.readlines_until("pong")
+
+        def tail():
+            resp = self.readline()
+            if resp != "pong":
+                raise Exception(f"ping expected pong, got: {resp}")
+
+        return self.defer(tail)
 
     def readlines_until(self, marker, echo=None):
         while self.is_open_redundant():
@@ -612,28 +628,11 @@ class Swire:
     def _readdatamsg(self):
         line = self.readline()
         if not line.startswith("data "):
-            raise Exception("Data expected, found: {line}")
+            raise Exception(f"Data expected, found: {line}")
         bytecount = int(line[5:], 16)
         result = self.serial.read(bytecount)
         assert len(result) == bytecount
         return result
-
-    def _read_worker(self):
-        while self.is_open_redundant():
-            line = self.serial.readline()
-            if line is None:
-                return
-            if not line:
-                continue
-            line = line.decode("utf-8").rstrip("\r\n")
-            if self.debug:
-                print(f" < {line}")
-            if not line.startswith("#"):
-                self.log_queue.put(line)
-            if line.startswith("data "):
-                buffer_size = int(line[5:].strip(), 16)
-                buffer = self.serial.read(buffer_size)
-                self.data_queue.put(buffer)
 
 
 @dataclass()
@@ -643,19 +642,57 @@ class CpuMetadata:
     swire_clk_div: int
 
 
+class LazyValue:
+    def __init__(self, fn):
+        self._fn = fn
+        self._state = None
+        self._lock = threading.Lock()
+        self._value = None
+
+    def _calc(self):
+        if self._state is None:
+            with self._lock:
+                if self._state is None:
+                    try:
+                        result = self._fn()
+                    except Exception as ex:
+                        self._value = ex
+                        self._state = "error"
+                        return
+                    self._value = result
+                    self._state = "result"
+
+    def result(self):
+        self._calc()
+        if self._state == "error":
+            raise self._value
+        if self._state == "result":
+            return self._value
+        raise Exception("wrong future")
+
+
+class MapFuture(LazyValue):
+    def __init__(self, fn, future):
+        def fn2():
+            return fn(future.result())
+
+        super().__init__(fn2)
+
+
 class BoundRegister:
     def __init__(self, swire, regmeta):
         self.swire = swire
         self.regmeta = regmeta
 
     def read(self):
-        return bigendian_decode(
-            self.swire.transaction_read(self.regmeta.address, self.regmeta.bytecount)
+        future = self.swire.transaction_read(
+            self.regmeta.address, self.regmeta.bytecount
         )
+        return MapFuture(bigendian_decode, future)
 
     def write(self, value: int):
         assert 0 <= value < (1 << (8 * self.regmeta.bytecount))
-        self.swire.transaction_write(
+        return self.swire.transaction_write(
             self.regmeta.address, bigendian_encode(value, self.regmeta.bytecount)
         )
 
@@ -706,7 +743,7 @@ class BandwidthCounter:
             self.pivot += self.window
             if self.first_print:
                 self.first_print = False
-            print(f"[i] Read speed: {humanbytes(self.count_window / self.window)}/s")
+            print(f"[i] Read speed: {humanbits(8 * self.count_window / self.window)}/s")
             self.count_window = 0
 
     def humantotal(self):
@@ -749,6 +786,30 @@ def humanbytes(x):
     if x < TB:
         return f"{x / GB:.2f} GB"
     return f"{x / TB:.2f} TB"
+
+
+def humanbits(x):
+    """Return the given bytes as a human friendly KB, MB, GB, or TB string."""
+    KB = float(1024)
+    MB = float(KB**2)  # 1,048,576
+    GB = float(KB**3)  # 1,073,741,824
+    TB = float(KB**4)  # 1,099,511,627,776
+
+    if x < KB:
+        return f"{x} b"
+    if x < MB:
+        return f"{x / KB:.2f} kb"
+    if x < GB:
+        return f"{x / MB:.2f} Mb"
+    if x < TB:
+        return f"{x / GB:.2f} Gb"
+    return f"{x / TB:.2f} Tb"
+
+
+class BlockingThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):
+    def __init__(self, *, queue_size=0, **kwargs):
+        super().__init__(**kwargs)
+        self._work_queue = queue.Queue(maxsize=queue_size)
 
 
 class MaybeDontCareState:

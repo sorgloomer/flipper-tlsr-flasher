@@ -8,8 +8,8 @@
 #include "src/swire/swire_bitbang.hpp"
 #include "src/commands/commands_pgm.hpp"
 
-#define _OK_RESPONSES           0
-#define _TRANSACTION_CHUNK_SIZE 16
+#define _OK_RESPONSES           1
+#define _TRANSACTION_CHUNK_SIZE 64
 
 static bool cmd_matches(const std::string& input, const char* cmd);
 static const char* cmd_get_params(const std::string& cmd);
@@ -178,7 +178,9 @@ FuriStatus cmd_pgm_transaction_write(SwireApp* app, const char* cargs) {
     swire_bitbang_transaction_end(app->swire);
 
     swire_bitbang_timer_join(app->swire);
+#if _OK_RESPONSES == 1
     swire_usb_writeline_cstr(app->usb, "ok");
+#endif
     return FuriStatusOk;
 }
 
@@ -307,7 +309,9 @@ FuriStatus cmd_pgm_wait_flash_ready(SwireApp* app, const char* cargs) {
         int32_t data = swire_bitbang_byte_read(app->swire);
         swire_bitbang_transaction_end(app->swire);
         if((data & MSPI_FLASH_STATUS_FLAG_BUSY) == 0) {
+#if _OK_RESPONSES == 1
             swire_usb_writeline_cstr(app->usb, "ok");
+#endif
             return FuriStatusOk;
         }
         if((int32_t)(furi_get_tick() - timeout_deadline) > 0) {
@@ -449,8 +453,10 @@ FuriStatus cmd_pgm_reset(SwireApp* app, const char* cargs) {
     furi_delay_ms(reset_duration_ms);
     furi_hal_gpio_write(pin_power, true);
     furi_delay_ms(reset_delay_ms);
-    // swire_usb_printf_ln(app->usb, "# reset %ld %ld", reset_delay_ms, reset_duration_ms);
+// swire_usb_printf_ln(app->usb, "# reset %ld %ld", reset_delay_ms, reset_duration_ms);
+#if _OK_RESPONSES == 1
     swire_usb_writeline_cstr(app->usb, "ok");
+#endif
     return FuriStatusOk;
 }
 
