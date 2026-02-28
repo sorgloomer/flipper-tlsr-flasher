@@ -18,6 +18,8 @@ FuriStatus cmd_pgm_bytes_read(SwireApp* app, const char* params);
 FuriStatus cmd_pgm_reset(SwireApp* app, const char* params);
 
 FuriStatus cmd_pgm_wait_flash_ready(SwireApp* app, const char* cargs);
+FuriStatus cmd_pgm_wait_mspi(SwireApp* app, const char* cargs);
+
 FuriStatus cmd_pgm_transaction_read(SwireApp* app, const char* cargs);
 FuriStatus cmd_pgm_transaction_write(SwireApp* app, const char* cargs);
 

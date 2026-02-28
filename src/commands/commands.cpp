@@ -73,6 +73,10 @@ void handle_text_command(SwireApp* app, std::string& cmd) {
         cmd_pgm_wait_flash_ready(app, cargs);
         return;
     }
+    if(cmd_matches(cmd, "wmspi")) {
+        cmd_pgm_wait_mspi(app, cargs);
+        return;
+    }
 
     if(cmd_matches(cmd, "slus")) {
         cmd_pgm_sleep_us(app, cargs);

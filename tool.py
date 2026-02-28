@@ -17,7 +17,9 @@ import sys
 SW_MAX_IMAGE_LEN = 512 * 1024
 
 TLSR_DUMP_CHUNK_SIZE = 4
-TLSR_FLASH_CHUNK_SIZE = 256
+TLSR_FLASH_CHUNK_SIZE = 32
+TLSR_FLASH_PAGE_SIZE = 256
+
 TLSR_FLASH_SECTOR_SIZE = 4096
 TLSR_FLASH_CMD_INITIATE_READ = 0x00
 TLSR_FLASH_CMD_WRITE = 0x02
@@ -64,18 +66,20 @@ def build_argparse():
     parser.add_argument(
         "--redeploy-fap", action=argparse.BooleanOptionalAction, default=False
     )
-    parser.add_argument("--dump", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--dump", action="store_true", default=False)
     parser.add_argument("--short", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--blink", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--out", type=str, default=None)
     parser.add_argument("--flash", type=str, default=None)
     parser.add_argument("--erase", type=int, default=None)
     parser.add_argument("--length", type=int, default=0)
     parser.add_argument("--chunksize", type=int, default=256)
+    parser.add_argument("--chunkcount", type=int, default=1)
     parser.add_argument("--addr", type=int, default=0)
     parser.add_argument("--bitrate", type=int, default=150000)
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--reset-duration", type=int, default=500)
-    parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--debug", action="store_true", default=False)
     return parser
 
 
@@ -87,7 +91,7 @@ def erase(args):
     with ExitStack() as stack:
         device = stack.enter_context(TlsrDevice(args))
 
-        device.with_common_setup(stack)
+        device.apply_common_setup(stack)
 
         device.flash.mspi_send_data(
             [
@@ -109,26 +113,28 @@ def flash(args):
     with ExitStack() as stack:
         device = stack.enter_context(TlsrDevice(args))
 
-        device.with_common_setup(stack)
-
-        device.flash.mspi_send_data(TLSR_FLASH_CMD_WRITE_ENABLE)
-        device.flash.mspi_init_write(args.addr)
-        # device.flash.mspi_start_auto_read()  # TODO: maybe not?
-        # device.flash.mspi_send_data(TLSR_FLASH_CMD_INITIATE_READ)
+        device.apply_common_setup(stack)
 
         flash_length = min(flash_length, os.path.getsize(args.flash))
         f = open(args.flash, "rb")
         addr = 0
         meter.restart()
         while addr < flash_length:
-            chunksize = min(TLSR_FLASH_CHUNK_SIZE, flash_length - addr)
+            chunksize = min(TLSR_FLASH_PAGE_SIZE, flash_length - addr)
             buf = f.read(chunksize)
             print(f"Writing {len(buf):x}/{chunksize:x}/{flash_length:x} to flash")
-            device.flash.mspi_send_data(buf)
-            device.flash.wait_ready()
+            device.flash.write2(addr, buf)
+            device.swire.consume_and_checkpoint().result()
             addr += chunksize
             meter.add_batch(len(buf))
     print(f"[i] flashed {meter.humantotal_bytes()}")
+
+
+def do_blinking(args):
+    with ExitStack() as stack:
+        device = stack.enter_context(TlsrDevice(args))
+        device.apply_common_setup(stack)
+        device.maybe_blinking_led1()
 
 
 def dump(args):
@@ -139,7 +145,7 @@ def dump(args):
     with ExitStack() as stack:
         device = stack.enter_context(TlsrDevice(args))
 
-        device.with_common_setup(stack)
+        device.apply_common_setup(stack)
 
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         if args.out:
@@ -155,18 +161,21 @@ def dump(args):
         meter.restart()
 
         def generate_futures():
-            for addr in range(0, dump_length, args.chunksize):
-                data_future = device.flash.read(addr, args.chunksize)
+            for addr in range(0, dump_length, args.chunksize * args.chunkcount):
+                with closing(
+                    device.flash.read_chunks(addr, args.chunksize, args.chunkcount)
+                ) as l_iter:
+                    for data_future in l_iter:
 
-                def _defer(addr, data_future, checkpoint_future):
-                    def defer():
-                        checkpoint_future.result()
-                        return addr, data_future.result()
+                        def _defer(addr, data_future, checkpoint_future):
+                            def defer():
+                                checkpoint_future.result()
+                                return addr, data_future.result()
 
-                    return LazyValue(defer)
+                            return LazyValue(defer)
 
-                checkpoint_future = device.swire.consume_and_checkpoint()
-                yield _defer(addr, data_future, checkpoint_future)
+                        checkpoint_future = device.swire.consume_and_checkpoint()
+                        yield _defer(addr, data_future, checkpoint_future)
 
         only_ff_from_addr = 0
         for addr, data in run_multiplexed(generate_futures()):
@@ -269,19 +278,46 @@ class TlsrDevice(ClosingMixin):
                 f"[E] failed to set slave swire clock divider {sanity_check:02x}"
             )
 
-    def with_common_setup(self, stack):
+    def apply_common_setup(self, stack):
         self.swire.check_programmer()
         self.swire.peek_wait()
         self.swire.init(self.args.bitrate)
         self.reset()
         self.cpu.stop()
         self.swire.peek_wait()
+        if self.args.blink:
+            self.maybe_blinking_led1().result()
         self.do_sanity_check()
         self.do_set_swire_clock()
         stack.enter_context(self.cpu.with_transaction_mode(DontCare))
         stack.enter_context(self.flash.with_cs(DontCare))
         cpu_metadata = self.cpu.read_cpu_metadata().result()
         print(f"[i] {cpu_metadata}")
+
+    def maybe_blinking_led1(self, blink_count=None, period=None):
+        if blink_count is None:
+            blink_count = 2
+        if period is None:
+            period = 1
+        # Configure C3 GPIO pin for LED1
+        self.swire.transaction_write(
+            0xC0, b"\x00"
+        )  # IEN Input Enable, active high, disable
+        self.swire.transaction_write(0x0596, b"\x08")  # GPIO Enable, active high
+        self.swire.transaction_write(
+            0xC2, b"\xff"
+        )  # DS Drive Strength, active high, strong
+        self.swire.transaction_write(
+            0x0592, b"\xf7"
+        )  # OEN Output Enable, active low, enable
+        for i in range(blink_count):
+            time.sleep(period / 2)
+            self.swire.transaction_write(0x0593, b"\x08")  # Output Led Off
+            time.sleep(period / 2)
+            self.swire.transaction_write(0x0593, b"\x00")  # Output Led On
+            if self.args.debug:
+                print(f"[d] Try blinking led {i}")
+        return self.swire.consume_and_checkpoint()
 
 
 @dataclass(frozen=True)
@@ -367,6 +403,10 @@ class TlsrFlash:
         self.flash_ready_timeout = 0.5
 
     def read(self, addr, bytecount):
+        with closing(self.read_chunks(addr, bytecount)) as l_iter:
+            return next(l_iter)
+
+    def read_chunks(self, addr, chunksize, chunkcount=1):
         with self.cpu.with_fifo():
             self.mspi_set_cs(False)
             self.device.sleep_us(1)
@@ -379,12 +419,52 @@ class TlsrFlash:
                 ]
             )
             self.mspi_send_control(TLSR_FLASH_FLD_MASTER_AUTO_READ)
-            result = self.swire.transaction_read(REG_SPI_DATA, bytecount)
-            # Transaction END signal initiates one more byte of read from the
-            # MSPI Data register, so it is not safe to start a new transaction
-            # without repositioning the flash cursor
-            self.mspi_set_cs(False)
-            return result
+            self.swire.transaction_read_start(REG_SPI_DATA)
+            try:
+                for _ in range(chunkcount):
+                    yield self.swire.transaction_read_block(chunksize)
+            finally:
+                self.swire.transaction_end()
+
+                # Transaction END signal initiates one more byte of read from the
+                # MSPI Data register, so it is not safe to start a new transaction
+                # without repositioning the flash cursor
+                self.mspi_set_cs(False)
+
+    def _flash_send_cmd(self, cmd):
+        self.mspi_set_cs(False)
+        self.device.sleep_us(1)
+        with self.cpu.with_fifo():
+            self.mspi_set_cs(True)
+            self.mspi_send_data(cmd)
+
+    def write(self, addr, data):
+        with self.cpu.with_fifo():
+            self._flash_send_cmd([TLSR_FLASH_CMD_WRITE_ENABLE])
+            self._flash_send_cmd(
+                [
+                    TLSR_FLASH_CMD_WRITE,
+                    *self.blk_addr(addr),
+                ]
+            )
+            for i in range(len(data)):
+                self.mspi_send_data([data[i]])
+                self.swire.write_raw_cmd("wmspi\n")
+            self.swire.write_raw_cmd("wfr\n")  # includes disable cs
+            return self.swire.consume_and_checkpoint()
+
+    def write2(self, addr, data):
+        with self.cpu.with_fifo():
+            self._flash_send_cmd([TLSR_FLASH_CMD_WRITE_ENABLE])
+            self._flash_send_cmd(
+                [
+                    TLSR_FLASH_CMD_WRITE,
+                    *self.blk_addr(addr),
+                ]
+            )
+            self.mspi_send_data(data, gap_us=10000)
+            self.swire.write_raw_cmd("wfr\n")  # includes disable cs
+            return self.swire.consume_and_checkpoint()
 
     def mspi_set_cs(self, value):
         if self.cs_enabled.set(value):
@@ -405,12 +485,12 @@ class TlsrFlash:
             print(f"[d] flash.mspi_send_control({data!r})")
         self.swire.transaction_write(REG_SPI_CTRL, data)
 
-    def mspi_send_data(self, data):
+    def mspi_send_data(self, data, gap_us=None):
         with ExitStack() as stack:
             stack.enter_context(self.cpu.with_fifo())
             if self.swire.debug:
                 print(f"[d] flash.mspi_send_data({data!r})")
-            self.swire.transaction_write(REG_SPI_DATA, data)
+            self.swire.transaction_write(REG_SPI_DATA, data, gap_us=gap_us)
 
     def mspi_init_read(self, addr):
         self.mspi_send_fcmd_addr(TLSR_FLASH_CMD_READ, addr)
@@ -576,15 +656,17 @@ class Swire:
         if len(data) != written:
             raise Exception(f"Write error {written}/{len(data)}")
 
-    def transaction_write(self, addr, data, slave_id=None):
+    def transaction_write(self, addr, data, slave_id=None, gap_us=None):
         if slave_id is None:
             slave_id = self.slave_id
+        if gap_us is None:
+            gap_us = 0
         if isinstance(data, int):
             data = [data]
         if isinstance(data, list):
             data = bytes(data)
 
-        self.write_raw_cmd(f"trw {addr:x} {slave_id:x} {len(data):x}\n")
+        self.write_raw_cmd(f"trw {addr:x} {slave_id:x} {len(data):x} {gap_us}\n")
         self.write_raw_data(data)
 
         return self._defer_ok("error in transaction_write")
@@ -609,8 +691,56 @@ class Swire:
 
         return self.defer(tail)
 
+    def transaction_read_start(self, addr, slave_id=None):
+        return self._transaction_start(
+            addr=addr,
+            wr=1,
+            slave_id=slave_id,
+            tag="transaction_read_start",
+        )
+
+    def transaction_read_block(self, block_size):
+        self.write_raw_cmd(f"br {block_size:x}\n")
+
+        def tail():
+            resp = self.readline()
+            if resp != "ok":
+                raise Exception(f"transaction_read_block: error {resp}")
+            data = self._readdatamsg()
+            if len(data) != block_size:
+                raise Exception(
+                    f"transaction_read_block: length error, len(data) {len(data)} != block_size {block_size}"
+                )
+            return data
+
+        return self.defer(tail)
+
+    def transaction_write_start(self, addr, slave_id=None):
+        return self._transaction_start(
+            addr=addr,
+            wr=0,
+            slave_id=slave_id,
+            tag="transaction_write_start",
+        )
+
+    def transaction_write_block(self, block):
+        self.write_raw_cmd(f"bw {len(block):x}\n")
+        self.write_raw_data(block)
+        return self._defer_ok("transaction_write_block")
+
+    def transaction_end(self):
+        self.write_raw_cmd(f"tre\n")
+        return self._defer_ok("transaction_end")
+
+    def _transaction_start(self, addr, wr, tag, slave_id=None):
+        if slave_id is None:
+            slave_id = self.slave_id
+        self.write_raw_cmd(f"trs {addr:x} {wr} {slave_id:x}\n")
+        return self._defer_ok(tag)
+
     def init(self, bitrate):
-        assert 75000 <= bitrate <= 1000000
+        # assert 75000 <= bitrate <= 1000000
+        assert 30000 <= bitrate <= 1000000
         self.write_raw_cmd(f"swire_init 3 {bitrate}\n")
         return self._defer_ok("error in swire_init")
 
@@ -797,7 +927,7 @@ class BandwidthCounter:
         return humanbytes(self.count_total / (time.time() - self.start)) + "/s"
 
     def humanavg_bits(self):
-        return humanbits(self.count_total / (time.time() - self.start)) + "/s"
+        return humanbits(8 * self.count_total / (time.time() - self.start)) + "/s"
 
     def print_report(self, msg):
         span = time.time() - self.pivot
@@ -820,40 +950,40 @@ class Box:
         self.value = value
 
 
-def humanbytes(x):
+def humanbytes(x_bytes):
     """Return the given bytes as a human friendly KB, MB, GB, or TB string."""
     KB = float(1024)
     MB = float(KB**2)  # 1,048,576
     GB = float(KB**3)  # 1,073,741,824
     TB = float(KB**4)  # 1,099,511,627,776
 
-    if x < KB:
-        return f"{x} B"
-    if x < MB:
-        return f"{x / KB:.2f} kB"
-    if x < GB:
-        return f"{x / MB:.2f} MB"
-    if x < TB:
-        return f"{x / GB:.2f} GB"
-    return f"{x / TB:.2f} TB"
+    if x_bytes < KB:
+        return f"{x_bytes} B"
+    if x_bytes < MB:
+        return f"{x_bytes / KB:.2f} kB"
+    if x_bytes < GB:
+        return f"{x_bytes / MB:.2f} MB"
+    if x_bytes < TB:
+        return f"{x_bytes / GB:.2f} GB"
+    return f"{x_bytes / TB:.2f} TB"
 
 
-def humanbits(x):
+def humanbits(x_bits):
     """Return the given bytes as a human friendly KB, MB, GB, or TB string."""
     KB = float(1024)
     MB = float(KB**2)  # 1,048,576
     GB = float(KB**3)  # 1,073,741,824
     TB = float(KB**4)  # 1,099,511,627,776
 
-    if x < KB:
-        return f"{x} b"
-    if x < MB:
-        return f"{x / KB:.2f} kb"
-    if x < GB:
-        return f"{x / MB:.2f} Mb"
-    if x < TB:
-        return f"{x / GB:.2f} Gb"
-    return f"{x / TB:.2f} Tb"
+    if x_bits < KB:
+        return f"{x_bits} b"
+    if x_bits < MB:
+        return f"{x_bits / KB:.2f} kb"
+    if x_bits < GB:
+        return f"{x_bits / MB:.2f} Mb"
+    if x_bits < TB:
+        return f"{x_bits / GB:.2f} Gb"
+    return f"{x_bits / TB:.2f} Tb"
 
 
 class BlockingThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):

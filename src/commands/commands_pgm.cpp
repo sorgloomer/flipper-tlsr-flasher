@@ -82,9 +82,10 @@ FuriStatus cmd_pgm_transaction_write(SwireApp* app, const char* cargs) {
         return FuriStatusErrorParameter;
     }
     int32_t addr, slave_id, bytecount;
-    int matched = sscanf(cargs, "%lx %lx %lx", &addr, &slave_id, &bytecount);
-    if(matched != 3) {
-        swire_usb_printf_ln(app->usb, "error params %d");
+    int32_t gap_us = 0;
+    int matched = sscanf(cargs, "%lx %lx %lx %ld", &addr, &slave_id, &bytecount, &gap_us);
+    if(matched < 3) {
+        swire_usb_printf_ln(app->usb, "error params %d", matched);
         return FuriStatusErrorParameter;
     }
 
@@ -122,9 +123,15 @@ FuriStatus cmd_pgm_transaction_write(SwireApp* app, const char* cargs) {
             return status;
         }
         for(int i = 0; i < chunk; i++) {
+            if(gap_us > 0) {
+                furi_delay_us(gap_us);
+            }
             swire_bitbang_byte_write(app->swire, buffer[i]);
         }
         bytecount -= chunk;
+    }
+    if(gap_us > 0) {
+        furi_delay_us(gap_us);
     }
     swire_bitbang_transaction_end(app->swire);
 
@@ -227,15 +234,18 @@ void cmd_pgm_transaction_end(SwireApp* app, const char* cargs) {
 #endif
 }
 
-#define REG_MSPI_DATA                     0x000c
-#define REG_MSPI_CONTROL                  0x000c
-#define MSPI_FLASH_CMD_GET_STATUS         0x05
-#define MSPI_FLASH_STATUS_FLAG_BUSY       0x01
-#define MSPI_FLASH_CMD_INITIATE_READ      0x00
-#define MSPI_FLASH_CONTROL_MASTER_SPI_RD  0x08 // read
-#define MSPI_FLASH_CONTROL_MASTER_SPI_SDO 0x02 // auto
-#define MSPI_FLASH_CONTROL_AUTOREAD \
-    (MSPI_FLASH_CONTROL_MASTER_SPI_RD | MSPI_FLASH_CONTROL_MASTER_SPI_SDO)
+static constexpr uint32_t REG_MSPI_DATA = 0x000c;
+static constexpr uint32_t REG_MSPI_CONTROL = 0x000d;
+static constexpr uint8_t MSPI_FLASH_CMD_GET_STATUS = 0x05;
+static constexpr uint8_t MSPI_FLASH_STATUS_FLAG_BUSY = 0x01;
+// static constexpr uint8_t MSPI_FLASH_CMD_INITIATE_READ = 0x00;
+// static constexpr uint8_t MSPI_FLASH_CONTROL_MASTER_SPI_RD = 0x08; // read
+// static constexpr uint8_t MSPI_FLASH_CONTROL_MASTER_SPI_SDO = 0x02; // auto
+static constexpr uint8_t MSPI_CTRL_CS_ENABLE = 0x00;
+static constexpr uint8_t MSPI_CTRL_CS_DISABLE = 0x01;
+static constexpr uint8_t MSPI_CTRL_FLD_MSPI_BUSY = 0x10;
+
+// static constexpr uint8_t MSPI_FLASH_CONTROL_AUTOREAD = MSPI_FLASH_CONTROL_MASTER_SPI_RD | MSPI_FLASH_CONTROL_MASTER_SPI_SDO;
 
 FuriStatus cmd_pgm_wait_flash_ready(SwireApp* app, const char* cargs) {
     uint32_t slave_id = 0;
@@ -243,32 +253,67 @@ FuriStatus cmd_pgm_wait_flash_ready(SwireApp* app, const char* cargs) {
     sscanf(cargs, "%ld %lx", &slave_id, &timeout);
     if(timeout < 0) timeout = 1000;
 
-    // swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwWrite, slave_id);
-    // swire_bitbang_byte_write(app->swire, MSPI_FLASH_CMD_INITIATE_READ);
-    // swire_bitbang_transaction_end(app->swire);
+    swire_bitbang_transaction_start(app->swire, REG_MSPI_CONTROL, SwireBitbangRwWrite, slave_id);
+    swire_bitbang_byte_write(app->swire, MSPI_CTRL_CS_DISABLE);
+    swire_bitbang_transaction_end(app->swire);
+    furi_delay_us(100);
+    swire_bitbang_transaction_start(app->swire, REG_MSPI_CONTROL, SwireBitbangRwWrite, slave_id);
+    swire_bitbang_byte_write(app->swire, MSPI_CTRL_CS_ENABLE);
+    swire_bitbang_transaction_end(app->swire);
 
-    // swire_bitbang_transaction_start(app->swire, REG_MSPI_CONTROL, SwireBitbangRwWrite, slave_id);
-    // swire_bitbang_byte_write(app->swire, MSPI_FLASH_CONTROL_AUTOREAD);
-    // swire_bitbang_transaction_end(app->swire);
+    swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwWrite, slave_id);
+    swire_bitbang_byte_write(app->swire, MSPI_FLASH_CMD_GET_STATUS);
+    swire_bitbang_transaction_end(app->swire);
 
+    swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwRead, slave_id);
     uint32_t timeout_deadline = furi_get_tick() + timeout;
     for(;;) {
-        swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwWrite, slave_id);
-        swire_bitbang_byte_write(app->swire, MSPI_FLASH_CMD_GET_STATUS);
-        swire_bitbang_transaction_end(app->swire);
-
-        swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwRead, slave_id);
         int32_t data = swire_bitbang_byte_read(app->swire);
-        swire_bitbang_transaction_end(app->swire);
         if((data & MSPI_FLASH_STATUS_FLAG_BUSY) == 0) {
 #if _OK_RESPONSES == 1
             swire_usb_writeline_cstr(app->usb, "ok");
 #endif
+            swire_bitbang_transaction_end(app->swire);
+            swire_bitbang_transaction_start(
+                app->swire, REG_MSPI_CONTROL, SwireBitbangRwWrite, slave_id);
+            swire_bitbang_byte_write(app->swire, MSPI_CTRL_CS_DISABLE);
+            swire_bitbang_transaction_end(app->swire);
             return FuriStatusOk;
         }
         if((int32_t)(furi_get_tick() - timeout_deadline) > 0) {
             auto str = str_printf("error timeout flash_status=%ld", data);
             swire_usb_writeline_str(app->usb, str);
+            swire_bitbang_transaction_end(app->swire);
+            swire_bitbang_transaction_start(
+                app->swire, REG_MSPI_CONTROL, SwireBitbangRwWrite, slave_id);
+            swire_bitbang_byte_write(app->swire, MSPI_CTRL_CS_DISABLE);
+            swire_bitbang_transaction_end(app->swire);
+            return FuriStatusErrorTimeout;
+        }
+    }
+}
+
+FuriStatus cmd_pgm_wait_mspi(SwireApp* app, const char* cargs) {
+    uint32_t slave_id = 0;
+    int32_t timeout = 1000;
+    sscanf(cargs, "%ld %lx", &slave_id, &timeout);
+    if(timeout < 0) timeout = 1000;
+
+    swire_bitbang_transaction_start(app->swire, REG_MSPI_CONTROL, SwireBitbangRwRead, slave_id);
+
+    uint32_t timeout_deadline = furi_get_tick() + timeout;
+    for(;;) {
+        int32_t data = swire_bitbang_byte_read(app->swire);
+        if((data & MSPI_CTRL_FLD_MSPI_BUSY) == 0) {
+#if _OK_RESPONSES == 1
+            swire_usb_writeline_cstr(app->usb, "ok");
+#endif
+            swire_bitbang_transaction_end(app->swire);
+            return FuriStatusOk;
+        }
+        if((int32_t)(furi_get_tick() - timeout_deadline) > 0) {
+            auto str = str_printf("error timeout flash_status=%ld", data);
+            swire_bitbang_transaction_end(app->swire);
             return FuriStatusErrorTimeout;
         }
     }
