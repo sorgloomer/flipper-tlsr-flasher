@@ -4,7 +4,6 @@
 #include "src/main.hpp"
 
 #include "src/utils/global_debug.hpp"
-#include "src/swire/swire_bitbang.hpp"
 #include "src/app/app.hpp"
 #include "src/utils/light_rgb.hpp"
 #include "src/furi/delay.hpp"
@@ -19,7 +18,6 @@ void swire_main() {
     furi::delay_ms(200ms);
 
     global_debug_init();
-    swire_bitbang_global_init();
 
     {
         auto app = std::make_unique<SwireApp>();

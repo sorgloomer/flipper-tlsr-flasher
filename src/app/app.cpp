@@ -107,8 +107,11 @@ SwireApp::SwireApp()
 
     SW_DEBUG_TRACE("app_alloc 12");
     app_set_blinker_state(this, BlinkerStateIdle);
+    SW_DEBUG_TRACE("app_alloc 13");
 
-    // app_set_usb_enabled(this, true); // TODO auto enable
+#if SW_START_APP_WITH_USB_ON
+    app_set_usb_enabled(this, true);
+#endif
     SW_DEBUG_TRACE("app_alloc return");
 }
 

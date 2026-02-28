@@ -5,9 +5,10 @@
 #define SW_USB_USE_DOUBLESET_WORKAROUND 0 // does not work
 #define SW_USB_USE_IRQDUMMY_WORKAROUND  0
 #define SW_CHECKPPOINT_TRACES           0
+#define SW_START_APP_WITH_USB_ON        1
 
 #define SW_DEFAULT_BITRATE 240000
-#define SW_IMAGE_LEN       144000 // 16
+#define SW_IMAGE_LEN       (512 * 1024)
 
 #if SW_CHECKPPOINT_TRACES
 #define SW_DEBUG_TRACE(format, ...) \

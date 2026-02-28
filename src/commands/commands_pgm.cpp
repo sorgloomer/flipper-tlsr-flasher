@@ -7,16 +7,13 @@
 #include "src/swire/swire_bitbang.hpp"
 #include "src/commands/commands_pgm.hpp"
 
-#define _OK_RESPONSES           1
-#define _TRANSACTION_CHUNK_SIZE 64
-
+#define _OK_RESPONSES 1
+static constexpr int32_t TRANSACTION_CHUNK_SIZE = 64;
+static constexpr int32_t MAX_TRANSACTION_SIZE = 1024 * 1024;
 static SwireBitbang* cmd_swire_alloc(SwireApp* app);
 
 static SwireBitbang* cmd_swire_alloc(SwireApp* app) {
-    SwireBitbang* swire = swire_bitbang_alloc_with_sws((IoPins){
-        .in = &gpio_ext_pa7,
-        .out = &gpio_ext_pa7,
-    });
+    SwireBitbang* swire = swire_bitbang_alloc_with_sws(&gpio_ext_pa7);
     swire_bitbang_set_bitrate(swire, app->config->bitrate);
     return swire;
 }
@@ -91,8 +88,9 @@ FuriStatus cmd_pgm_transaction_write(SwireApp* app, const char* cargs) {
         return FuriStatusErrorParameter;
     }
 
-    if(bytecount < 0 || bytecount > 1024) {
-        swire_usb_printf_ln(app->usb, "error params bytecount");
+    if(bytecount < 0 || bytecount > MAX_TRANSACTION_SIZE) {
+        swire_usb_printf_ln(
+            app->usb, "error params bytecount out of range, max: %ld", MAX_TRANSACTION_SIZE);
         return FuriStatusErrorParameter;
     }
 
@@ -104,9 +102,9 @@ FuriStatus cmd_pgm_transaction_write(SwireApp* app, const char* cargs) {
 
     swire_bitbang_transaction_start(app->swire, addr, SwireBitbangRwWrite, slave_id);
 
-    uint8_t buffer[_TRANSACTION_CHUNK_SIZE];
+    uint8_t buffer[TRANSACTION_CHUNK_SIZE];
     while(bytecount > 0) {
-        int32_t chunk = MIN(bytecount, _TRANSACTION_CHUNK_SIZE);
+        int32_t chunk = MIN(bytecount, TRANSACTION_CHUNK_SIZE);
         status = swire_usb_read(app->usb, (uint8_t*)&buffer, chunk);
         if(status != FuriStatusOk) {
             FURI_LOG_E(
@@ -154,8 +152,9 @@ FuriStatus cmd_pgm_transaction_read(SwireApp* app, const char* cargs) {
         return FuriStatusErrorParameter;
     }
 
-    if(bytecount < 0 || bytecount > 1024) {
-        swire_usb_printf_ln(app->usb, "error params bytecount");
+    if(bytecount < 0 || bytecount > MAX_TRANSACTION_SIZE) {
+        swire_usb_printf_ln(
+            app->usb, "error params bytecount out of range, max: %ld", MAX_TRANSACTION_SIZE);
         return FuriStatusErrorParameter;
     }
 
@@ -167,13 +166,13 @@ FuriStatus cmd_pgm_transaction_read(SwireApp* app, const char* cargs) {
 
     swire_bitbang_transaction_start(app->swire, addr, SwireBitbangRwRead, slave_id);
 
-    uint8_t buffer[_TRANSACTION_CHUNK_SIZE];
+    uint8_t buffer[TRANSACTION_CHUNK_SIZE];
     bool had_read_error = false;
     int32_t err_left;
     int32_t byte = 0xff;
     swire_usb_printf_ln(app->usb, "data %lx", (int32_t)bytecount);
     while(bytecount > 0) {
-        int32_t chunk = MIN(bytecount, _TRANSACTION_CHUNK_SIZE);
+        int32_t chunk = MIN(bytecount, TRANSACTION_CHUNK_SIZE);
         for(int i = 0; i < chunk; i++) {
             if(!had_read_error) byte = swire_bitbang_byte_read(app->swire);
             if(byte < 0) {
@@ -309,9 +308,9 @@ FuriStatus cmd_pgm_bytes_write(SwireApp* app, const char* cargs) {
         return FuriStatusErrorParameter;
     }
 
-    uint8_t buffer[_TRANSACTION_CHUNK_SIZE];
+    uint8_t buffer[TRANSACTION_CHUNK_SIZE];
     while(bytecount > 0) {
-        int32_t chunksize = MIN(_TRANSACTION_CHUNK_SIZE, bytecount);
+        int32_t chunksize = MIN(TRANSACTION_CHUNK_SIZE, bytecount);
         status = swire_usb_read(app->usb, buffer, chunksize);
         if((FuriFlag)status & FuriFlagError) {
             app->swire->error = status == FuriStatusErrorTimeout ? SwireBitbangErrorTimeout :

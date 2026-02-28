@@ -1,10 +1,7 @@
 #pragma once
 
 enum SwireGuiEvent {
-    SwireGuiEventBitbangRead = 1,
-    SwireGuiEventBitbangTest,
-    SwireGuiEventFreqTest,
-    SwireGuiEventErrorBack,
+    SwireGuiEventErrorBack = 1,
     SwireGuiEventUsbEnabledOn,
     SwireGuiEventUsbEnabledbOff
 };

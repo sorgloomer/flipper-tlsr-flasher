@@ -9,7 +9,6 @@
 #include "swire_gui_event.hpp"
 #include "src/app/app.hpp"
 #include "src/app/bitrate_options.hpp"
-#include "src/commands/commands_bitbang.hpp"
 
 using namespace std::chrono_literals;
 
@@ -33,17 +32,19 @@ const char* const swire_usb_enabled_text[SwireUsbEnabled__count] = {
 static void scene_start_var_list_enter_callback(void* context, uint32_t index) {
     furi_assert(context);
     SwireApp* app = (SwireApp*)context;
-    switch(index) {
-    case SwireStartItemBitbangRead:
-        view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEventBitbangRead);
-        break;
-    case SwireStartItemBitbangTest:
-        view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEventBitbangTest);
-        break;
-    case SwireStartItemFreqTest:
-        view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEventFreqTest);
-        break;
-    }
+    UNUSED(app);
+    UNUSED(index);
+    // switch(index) {
+    // case SwireStartItemBitbangRead:
+    //     view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEventBitbangRead);
+    //     break;
+    // case SwireStartItemBitbangTest:
+    //     view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEventBitbangTest);
+    //     break;
+    // case SwireStartItemFreqTest:
+    //     view_dispatcher_send_custom_event(app->view_dispatcher, SwireGuiEventFreqTest);
+    //     break;
+    // }
 }
 
 static void usb_enabled_change_callback(VariableItem* item) {
@@ -136,15 +137,6 @@ bool swire_scene_start_on_event(void* context, SceneManagerEvent event) {
         return false;
     }
     switch(event.event) {
-    case SwireGuiEventBitbangRead:
-        cmd_bitbang_read(app);
-        break;
-    case SwireGuiEventBitbangTest:
-        cmd_bitbang_test_simple(app);
-        break;
-    case SwireGuiEventFreqTest:
-        cmd_bitbang_test_switching_freq(app);
-        break;
     case SwireGuiEventUsbEnabledOn:
         app_set_usb_enabled(app, true);
         app_set_blinker(app, 0x00ffff, 1000ms);

@@ -1,6 +1,5 @@
 
 #include "src/app/app.hpp"
-#include "src/commands/commands_bitbang.hpp"
 #include "src/commands/commands_pgm.hpp"
 #include "src/commands/commands.hpp"
 
@@ -77,11 +76,6 @@ void handle_text_command(SwireApp* app, std::string& cmd) {
 
     if(cmd_matches(cmd, "slus")) {
         cmd_pgm_sleep_us(app, cargs);
-        return;
-    }
-
-    if(cmd == "bbt") {
-        cmd_bitbang_test_simple(app);
         return;
     }
 

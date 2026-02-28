@@ -27,7 +27,7 @@ SWIRE_INLINE bool swire_clock_tick_elapsed(uint32_t tick) {
     return ((int32_t)(swire_clock_get_cycclk() - tick)) >= 0;
 }
 
-SWIRE_INLINE void swire_clock_spinwait_until_tick(uint32_t tick) {
+SWIRE_INLINE void swire_clock_spinwait_until_cycclk(uint32_t tick) {
     while(!swire_clock_tick_elapsed(tick))
         ;
 }

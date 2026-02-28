@@ -49,7 +49,7 @@ def main(args=None):
     if args is None:
         args = build_argparse().parse_args()
 
-    if args.fap:
+    if args.redeploy_fap:
         redeploy_fap(args)
     if args.dump:
         dump(args)
@@ -61,7 +61,9 @@ def main(args=None):
 
 def build_argparse():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fap", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--redeploy-fap", action=argparse.BooleanOptionalAction, default=False
+    )
     parser.add_argument("--dump", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--short", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--out", type=str, default=None)
@@ -69,7 +71,6 @@ def build_argparse():
     parser.add_argument("--erase", type=int, default=None)
     parser.add_argument("--length", type=int, default=0)
     parser.add_argument("--chunksize", type=int, default=256)
-    parser.add_argument("--chunkcount", type=int, default=1)
     parser.add_argument("--addr", type=int, default=0)
     parser.add_argument("--bitrate", type=int, default=150000)
     parser.add_argument("--baud", type=int, default=115200)
@@ -154,20 +155,18 @@ def dump(args):
         meter.restart()
 
         def generate_futures():
-            for addr in range(0, dump_length, args.chunksize * args.chunkcount):
-                for data_future in device.flash.read_chunks(
-                    addr, args.chunksize, args.chunkcount
-                ):
+            for addr in range(0, dump_length, args.chunksize):
+                data_future = device.flash.read(addr, args.chunksize)
 
-                    def _defer(addr, data_future, checkpoint_future):
-                        def defer():
-                            checkpoint_future.result()
-                            return addr, data_future.result()
+                def _defer(addr, data_future, checkpoint_future):
+                    def defer():
+                        checkpoint_future.result()
+                        return addr, data_future.result()
 
-                        return LazyValue(defer)
+                    return LazyValue(defer)
 
-                    checkpoint_future = device.swire.consume_and_checkpoint()
-                    yield _defer(addr, data_future, checkpoint_future)
+                checkpoint_future = device.swire.consume_and_checkpoint()
+                yield _defer(addr, data_future, checkpoint_future)
 
         only_ff_from_addr = 0
         for addr, data in run_multiplexed(generate_futures()):
@@ -386,24 +385,6 @@ class TlsrFlash:
             # without repositioning the flash cursor
             self.mspi_set_cs(False)
             return result
-
-    def read_chunks(self, addr, chunksize, chunkcount):
-        with self.cpu.with_fifo():
-            self.mspi_set_cs(False)
-            self.device.sleep_us(1)  # probably placebo at swire speeds
-            self.mspi_set_cs(True)
-            self.mspi_send_data(
-                [
-                    TLSR_FLASH_CMD_READ,
-                    *self.blk_addr(addr),
-                    0x00,  # dummy byte to initiate read clock
-                ]
-            )
-            self.mspi_send_control(TLSR_FLASH_FLD_MASTER_AUTO_READ)
-            for _ in range(chunkcount):
-                self.device.sleep_us(1000)
-                yield self.swire.transaction_read(REG_SPI_DATA, chunksize)
-            self.mspi_set_cs(False)
 
     def mspi_set_cs(self, value):
         if self.cs_enabled.set(value):
