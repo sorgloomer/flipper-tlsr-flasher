@@ -12,9 +12,11 @@ import threading
 import queue
 import concurrent.futures
 from collections import deque
+import sys
 
 SW_MAX_IMAGE_LEN = 512 * 1024
 
+TLSR_DUMP_CHUNK_SIZE = 4
 TLSR_FLASH_CHUNK_SIZE = 256
 TLSR_FLASH_SECTOR_SIZE = 4096
 TLSR_FLASH_CMD_INITIATE_READ = 0x00
@@ -28,6 +30,15 @@ TLSR_FLASH_CMD_ERASE_CHIP = 0x60
 TLSR_FLASH_CMD_GET_JEDEC_ID = 0x9F
 TLSR_FLASH_CMD_POWER_DOWN = 0xB9
 TLSR_FLASH_CMD_ERASE_BLOCK = 0xD8
+
+TLSR_FLASH_FLD_MASTER_SPI_RD = 0x08  # read
+TLSR_FLASH_FLD_MASTER_SPI_SDO = 0x02  # auto
+TLSR_FLASH_FLD_MASTER_AUTO_READ = (
+    TLSR_FLASH_FLD_MASTER_SPI_RD | TLSR_FLASH_FLD_MASTER_SPI_SDO
+)
+
+TLSR_FLASH_FLD_MASTER_SPI_BUSY = 0x10
+TLSR_FLASH_FLD_SLAVE_SPI_BUSY = 0x40
 
 
 REG_SPI_DATA = 0x000C
@@ -57,6 +68,8 @@ def build_argparse():
     parser.add_argument("--flash", type=str, default=None)
     parser.add_argument("--erase", type=int, default=None)
     parser.add_argument("--length", type=int, default=0)
+    parser.add_argument("--chunksize", type=int, default=256)
+    parser.add_argument("--chunkcount", type=int, default=1)
     parser.add_argument("--addr", type=int, default=0)
     parser.add_argument("--bitrate", type=int, default=150000)
     parser.add_argument("--baud", type=int, default=115200)
@@ -114,7 +127,7 @@ def flash(args):
             device.flash.wait_ready()
             addr += chunksize
             meter.add_batch(len(buf))
-    print(f"[i] flashed {meter.humantotal()}")
+    print(f"[i] flashed {meter.humantotal_bytes()}")
 
 
 def dump(args):
@@ -127,54 +140,60 @@ def dump(args):
 
         device.with_common_setup(stack)
 
-        device.flash.mspi_init_read(args.addr)
-
-        device.flash.mspi_start_auto_read()
-        stack.enter_context(device.cpu.with_fifo())
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         if args.out:
             outfilepath = args.out
         else:
             os.makedirs(".dumps", exist_ok=True)
-            outfilepath = f".dumps/dump-{ts}-{args.bitrate}bps.bin"
+            outfilepath = f".dumps/dump-{ts}.bin"
         f = stack.enter_context(open(outfilepath, "wb"))
-
+        fmeta = stack.enter_context(open(outfilepath + ".meta", "w"))
+        fmeta.write(f"dump timestamp: {ts}\n")
+        fmeta.write(f"args: {sys.argv}\n")
         stack.enter_context(ConfigTimeoutContext(device.swire, 5))
         meter.restart()
 
-        chunk_futures = deque()
+        def generate_futures():
+            for addr in range(0, dump_length, args.chunksize * args.chunkcount):
+                for data_future in device.flash.read_chunks(
+                    addr, args.chunksize, args.chunkcount
+                ):
 
-        short_end_reached = False
+                    def _defer(addr, data_future, checkpoint_future):
+                        def defer():
+                            checkpoint_future.result()
+                            return addr, data_future.result()
 
-        def consume_chunks(keep=0):
-            nonlocal short_end_reached
-            while len(chunk_futures) > keep:
-                if short_end_reached:
-                    return
-                data = chunk_futures.popleft().result()
-                if args.short and all(b == 0xFF for b in data):
-                    short_end_reached = True
-                    return
-                f.write(data)
-                meter.add_batch(len(data))
+                        return LazyValue(defer)
 
-        for addr in range(0, dump_length, TLSR_FLASH_CHUNK_SIZE):
-            if short_end_reached:
+                    checkpoint_future = device.swire.consume_and_checkpoint()
+                    yield _defer(addr, data_future, checkpoint_future)
+
+        only_ff_from_addr = 0
+        for addr, data in run_multiplexed(generate_futures()):
+            if not (args.short and all(b == 0xFF for b in data)):
+                only_ff_from_addr = addr + len(data)
+            if only_ff_from_addr + 256 <= addr:
+                print(f"short end reached at {addr}")
                 break
-            # device.flash.mspi_init_read(addr)
-            future = device.flash.read(TLSR_FLASH_CHUNK_SIZE)
-            chunk_futures.append(future)
-            # do not wait until the end to show the errors
-            # but do not wait for every roundtrip for speed
-            # keep 5 messages in the pipeline at a time
-            # same for the data chunks, but those are only
-            # a fraction of all messages, enough to keep 2
-            consume_chunks(keep=2)
-            device.swire.peek_wait(keep=5)
-        consume_chunks(keep=0)
-        device.swire.peek_wait()
+            f.write(data)
+            meter.add_batch(len(data))
 
-    print(f"[i] dumped {meter.humantotal()}")
+        avgspeed = meter.humanavg_bits()
+        fmeta.write(f"dumped: {meter.humantotal_bytes()}\n")
+        fmeta.write(f"average speed: {avgspeed}\n")
+        print(f"[i] dumped: {meter.humantotal_bytes()}")
+        print(f"[i] average speed: {avgspeed}")
+
+
+def run_multiplexed(gen_futures, parallelism=2):
+    l_futures = deque()
+    for f in gen_futures:
+        l_futures.append(f)
+        while len(l_futures) >= parallelism:
+            yield l_futures.popleft().result()
+    while len(l_futures) > 0:
+        yield l_futures.popleft().result()
 
 
 def redeploy_fap(args):
@@ -215,21 +234,19 @@ class TlsrDevice(ClosingMixin):
         self.args = args
         self.swire = swire
         self.cpu = TlsrCpu825x(self.swire)
-        self.flash = TlsrFlash(self.swire, self.cpu)
+        self.flash = TlsrFlash(self)
 
     def close(self):
         if self.swire_owned:
             self.swire.close()
 
-    def reset(self):
-        self.swire.write_raw_cmd(f"reset 70 {self.args.reset_duration}\n")
+    def reset(self, reset_delay_ms=70):
+        self.swire.write_raw_cmd(f"reset {reset_delay_ms} {self.args.reset_duration}\n")
+        return self.swire._defer_ok("device.reset")
 
-        def tail():
-            response = self.swire.readline()
-            if response != "ok":
-                raise Exception(f"reset failed, response was: {response}")
-
-        return self.swire.defer(tail)
+    def sleep_us(self, us):
+        self.swire.write_raw_cmd(f"slus {us}\n")
+        return self.swire._defer_ok("device.sleep_us")
 
     def do_sanity_check(self):
         self.swire.ping_sync("sanity_check")
@@ -339,11 +356,54 @@ class TlsrCpuTransactionModeContext(ClosingMixin):
 
 
 class TlsrFlash:
-    def __init__(self, swire, cpu):
-        self.swire = swire
-        self.cpu = cpu
+    cpu: TlsrCpu825x
+    device: TlsrDevice
+    swire: Swire
+
+    def __init__(self, device):
+        self.device = device
+        self.swire = device.swire
+        self.cpu = device.cpu
         self.cs_enabled = MaybeDontCareState(False)
         self.flash_ready_timeout = 0.5
+
+    def read(self, addr, bytecount):
+        with self.cpu.with_fifo():
+            self.mspi_set_cs(False)
+            self.device.sleep_us(1)
+            self.mspi_set_cs(True)
+            self.mspi_send_data(
+                [
+                    TLSR_FLASH_CMD_READ,
+                    *self.blk_addr(addr),
+                    0x00,  # dummy byte to initiate read clock
+                ]
+            )
+            self.mspi_send_control(TLSR_FLASH_FLD_MASTER_AUTO_READ)
+            result = self.swire.transaction_read(REG_SPI_DATA, bytecount)
+            # Transaction END signal initiates one more byte of read from the
+            # MSPI Data register, so it is not safe to start a new transaction
+            # without repositioning the flash cursor
+            self.mspi_set_cs(False)
+            return result
+
+    def read_chunks(self, addr, chunksize, chunkcount):
+        with self.cpu.with_fifo():
+            self.mspi_set_cs(False)
+            self.device.sleep_us(1)  # probably placebo at swire speeds
+            self.mspi_set_cs(True)
+            self.mspi_send_data(
+                [
+                    TLSR_FLASH_CMD_READ,
+                    *self.blk_addr(addr),
+                    0x00,  # dummy byte to initiate read clock
+                ]
+            )
+            self.mspi_send_control(TLSR_FLASH_FLD_MASTER_AUTO_READ)
+            for _ in range(chunkcount):
+                self.device.sleep_us(1000)
+                yield self.swire.transaction_read(REG_SPI_DATA, chunksize)
+            self.mspi_set_cs(False)
 
     def mspi_set_cs(self, value):
         if self.cs_enabled.set(value):
@@ -351,7 +411,8 @@ class TlsrFlash:
 
     def _mspi_set_cs_force(self, value):
         # Chip Select
-        print(f"[d] set mspi chip select {value}")
+        if self.swire.debug:
+            print(f"[d] set mspi chip select {value}")
         self.mspi_send_control([b"\x01", b"\x00"][value])  # MSPI Control disable CS
         self.cs_enabled.actual = value
 
@@ -359,24 +420,16 @@ class TlsrFlash:
         return TlsrFlashCsContext(self, cs)
 
     def mspi_send_control(self, data):
-        print(f"[d] flash.mspi_send_control({data!r})")
+        if self.swire.debug:
+            print(f"[d] flash.mspi_send_control({data!r})")
         self.swire.transaction_write(REG_SPI_CTRL, data)
 
     def mspi_send_data(self, data):
         with ExitStack() as stack:
-            stack.enter_context(self.with_cs())
             stack.enter_context(self.cpu.with_fifo())
             if self.swire.debug:
                 print(f"[d] flash.mspi_send_data({data!r})")
             self.swire.transaction_write(REG_SPI_DATA, data)
-
-    def read(self, length):
-        with ExitStack() as stack:
-            stack.enter_context(self.with_cs())
-            stack.enter_context(self.cpu.with_fifo())
-            if self.swire.debug:
-                print(f"[d] flash.read({length!r})")
-            return self.swire.transaction_read(REG_SPI_DATA, length)
 
     def mspi_init_read(self, addr):
         self.mspi_send_fcmd_addr(TLSR_FLASH_CMD_READ, addr)
@@ -402,10 +455,6 @@ class TlsrFlash:
         # MSPI Data, 00 to drive MSPI Clock to initiate first read
         # MSPI Control, 0a to auto read mode
         # 0a = FLD_MASTER_SPI_RD | FLD_MASTER_SPI_SDO
-        FLD_MASTER_SPI_RD = 0x08  # read
-        FLD_MASTER_SPI_SDO = 0x02  # auto
-        FLD_MASTER_SPI_BUSY = (0x10,)
-        FLD_SLAVE_SPI_BUSY = (0x40,)
         with ExitStack() as stack:
             stack.enter_context(self.cpu.with_transaction_mode("mem"))
             stack.enter_context(self.with_cs())
@@ -413,7 +462,7 @@ class TlsrFlash:
                 REG_SPI_DATA,
                 [
                     TLSR_FLASH_CMD_INITIATE_READ,
-                    FLD_MASTER_SPI_RD | FLD_MASTER_SPI_SDO,
+                    TLSR_FLASH_FLD_MASTER_AUTO_READ,
                 ],
             )  # MSPI read addr[1]
 
@@ -477,6 +526,11 @@ class Swire:
         result = None
         while len(self.pending_futures) > keep:
             result = self.pending_futures.popleft().result()
+        return result
+
+    def consume_and_checkpoint(self):
+        result = CheckpointFuture(self.pending_futures)
+        self.pending_futures = []
         return result
 
     def defer(self, fn):
@@ -679,6 +733,15 @@ class MapFuture(LazyValue):
         super().__init__(fn2)
 
 
+class CheckpointFuture:
+    def __init__(self, futures):
+        self.futures = futures
+
+    def result(self):
+        for f in self.futures:
+            f.result()
+
+
 class BoundRegister:
     def __init__(self, swire, regmeta):
         self.swire = swire
@@ -746,12 +809,18 @@ class BandwidthCounter:
             print(f"[i] Read speed: {humanbits(8 * self.count_window / self.window)}/s")
             self.count_window = 0
 
-    def humantotal(self):
+    def humantotal_bytes(self):
         return humanbytes(self.count_total)
+
+    def humanavg_bytes(self):
+        return humanbytes(self.count_total / (time.time() - self.start)) + "/s"
+
+    def humanavg_bits(self):
+        return humanbits(self.count_total / (time.time() - self.start)) + "/s"
 
     def print_report(self, msg):
         span = time.time() - self.pivot
-        print(f"[i] {msg} {self.humantotal()} in {span:03f} s")
+        print(f"[i] {msg} {self.humantotal_bytes()} in {span:03f} s")
 
 
 class ConfigTimeoutContext(ClosingMixin):

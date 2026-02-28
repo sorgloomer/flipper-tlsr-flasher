@@ -1,4 +1,3 @@
-#include <string>
 #include <memory>
 #include <furi.h>
 #include <furi_hal_resources.h>
@@ -11,53 +10,7 @@
 #define _OK_RESPONSES           1
 #define _TRANSACTION_CHUNK_SIZE 64
 
-static bool cmd_matches(const std::string& input, const char* cmd);
-static const char* cmd_get_params(const std::string& cmd);
 static SwireBitbang* cmd_swire_alloc(SwireApp* app);
-
-bool cmd_pgm(SwireApp* app, std::string& cmd) {
-    const char* cargs = cmd_get_params(cmd);
-
-    if(cmd_matches(cmd, "swire_init")) {
-        cmd_pgm_init(app, cargs);
-        return true;
-    }
-    if(cmd_matches(cmd, "trs")) {
-        cmd_pgm_transaction_start(app, cargs);
-        return true;
-    }
-    if(cmd_matches(cmd, "tre")) {
-        cmd_pgm_transaction_end(app, cargs);
-        return true;
-    }
-    if(cmd_matches(cmd, "bw")) {
-        cmd_pgm_bytes_write(app, cargs);
-        return true;
-    }
-    if(cmd_matches(cmd, "br")) {
-        cmd_pgm_bytes_read(app, cargs);
-        return true;
-    }
-    if(cmd_matches(cmd, "reset")) {
-        cmd_pgm_reset(app, cargs);
-        return true;
-    }
-
-    if(cmd_matches(cmd, "trw")) {
-        cmd_pgm_transaction_write(app, cargs);
-        return true;
-    }
-    if(cmd_matches(cmd, "trr")) {
-        cmd_pgm_transaction_read(app, cargs);
-        return true;
-    }
-    if(cmd_matches(cmd, "wfr")) {
-        cmd_pgm_wait_flash_ready(app, cargs);
-        return true;
-    }
-
-    return false;
-}
 
 static SwireBitbang* cmd_swire_alloc(SwireApp* app) {
     SwireBitbang* swire = swire_bitbang_alloc_with_sws((IoPins){
@@ -460,21 +413,12 @@ FuriStatus cmd_pgm_reset(SwireApp* app, const char* cargs) {
     return FuriStatusOk;
 }
 
-static bool cmd_matches(const std::string& input, const char* cmd) {
-    if(!input.starts_with(cmd)) {
-        return false;
-    }
-    unsigned int cmdlen = strlen(cmd);
-    if(input.size() == cmdlen) {
-        return true;
-    }
-    if(input.size() > cmdlen && input[cmdlen] == ' ') {
-        return true;
-    }
-    return false;
-}
-static const char* cmd_get_params(const std::string& cmd) {
-    const char* ccmd = cmd.c_str();
-    const char* space = strchr(ccmd, ' ');
-    return space != NULL ? space + 1 : ccmd + strlen(ccmd);
+void cmd_pgm_sleep_us(SwireApp* app, const char* cargs) {
+    UNUSED(app);
+    uint32_t us = 1;
+    sscanf(cargs, "%ld", &us);
+    furi_delay_us(us);
+#if _OK_RESPONSES == 1
+    swire_usb_writeline_cstr(app->usb, "ok");
+#endif
 }
