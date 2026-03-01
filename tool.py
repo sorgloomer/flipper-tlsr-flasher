@@ -138,9 +138,8 @@ def flash(args):
                         print(
                             f"[W] address misaligned from sector for erase {addr} != {sector_addr}"
                         )
-                    if args.debug:
-                        print(f"[D] erasing sector {sector_addr}")
-                    device.flash.erase_sector(sector_addr)
+                    print(f"[i] erasing sector 0x{sector_addr:06x}")
+                    device.flash.erase_sector(sector_addr).result()
                     erased_end = sector_end
 
                 chunk_size = min(page_end, flash_end) - addr
@@ -149,11 +148,12 @@ def flash(args):
                 device.flash.write(addr, chunk_buf)
                 yield device.swire.consume_and_checkpoint()
                 addr += chunk_size
-                meter.add_batch(len(chunk_buf))
+                meter.add_batch(len(chunk_buf), "flash speed")
 
-        with run_multiplexed(flasher_generator()) as l_iter:
-            for _ in l_iter:
-                pass
+        with closing(flasher_generator()) as _iter1:
+            with closing(run_multiplexed(_iter1)) as _iter2:
+                for _ in _iter2:
+                    pass
 
     print(f"[i] flashed {meter.humantotal_bytes()}")
 
@@ -218,7 +218,7 @@ def dump(args):
                 print(f"short end reached at {addr}")
                 break
             f.write(data)
-            meter.add_batch(len(data))
+            meter.add_batch(len(data), "dump speed")
 
         avgspeed = meter.humanavg_bits()
         fmeta.write(f"dumped: {meter.humantotal_bytes()}\n")
@@ -329,7 +329,7 @@ class TlsrDevice(ClosingMixin):
 
     def maybe_blinking_led1(self, blink_count=None, period=None):
         if blink_count is None:
-            blink_count = 2
+            blink_count = 1
         if period is None:
             period = 1
         # Configure C3 GPIO pin for LED1
@@ -483,8 +483,20 @@ class TlsrFlash:
             for i in range(len(data)):
                 self.mspi_send_data([data[i]])
                 self.swire.write_raw_cmd("wmspi\n")
-            self.swire.write_raw_cmd("wfr\n")  # includes disable cs
+            self._wait_flash_ready_and_disable_cs()
             return self.swire.consume_and_checkpoint()
+
+    def _wait_flash_ready_and_disable_cs(self):
+        self.swire.write_raw_cmd("wfr\n")
+
+        def tail():
+            line = self.swire.readline()
+            if self.swire.debug:
+                print(f"[d] _wait_flash_ready_and_disable_cs result: {line}")
+            if not (line + " ").startswith("ok"):
+                raise Exception(f"error _wait_flash_ready_and_disable_cs: {line}")
+
+        return self.swire.defer(tail)
 
     def write(self, addr, data):
         return self._flash_mspi_write(cmd=TLSR_FLASH_CMD_WRITE, addr=addr, data=data)
@@ -510,7 +522,7 @@ class TlsrFlash:
                 ],
                 gap_us=10,
             )
-            self.swire.write_raw_cmd("wfr\n")  # includes disable cs
+            self._wait_flash_ready_and_disable_cs()
             return self.swire.consume_and_checkpoint()
 
     def mspi_set_cs(self, value):
@@ -957,14 +969,17 @@ class BandwidthCounter:
         self.pivot = self.start + self.window
         self.first_print = True
 
-    def add_batch(self, size, message="read speed"):
+    def add_batch(self, size, message=None):
         self.count_window += size
         self.count_total += size
         if time.time() > self.pivot:
             self.pivot += self.window
             if self.first_print:
                 self.first_print = False
-            print(f"[i] {message}: {humanbits(8 * self.count_window / self.window)}/s")
+            if message is not None:
+                print(
+                    f"[i] {message}: {humanbits(8 * self.count_window / self.window)}/s"
+                )
             self.count_window = 0
 
     def humantotal_bytes(self):
