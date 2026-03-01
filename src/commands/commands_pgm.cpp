@@ -236,7 +236,7 @@ void cmd_pgm_transaction_end(SwireApp* app, const char* cargs) {
 
 static constexpr uint32_t REG_MSPI_DATA = 0x000c;
 static constexpr uint32_t REG_MSPI_CONTROL = 0x000d;
-static constexpr uint8_t MSPI_FLASH_CMD_GET_STATUS = 0x05;
+static constexpr uint8_t MSPI_FLASH_CMD_READ_STATUS_LOWBYTE = 0x05;
 static constexpr uint8_t MSPI_FLASH_STATUS_FLAG_BUSY = 0x01;
 // static constexpr uint8_t MSPI_FLASH_CMD_INITIATE_READ = 0x00;
 // static constexpr uint8_t MSPI_FLASH_CONTROL_MASTER_SPI_RD = 0x08; // read
@@ -262,7 +262,7 @@ FuriStatus cmd_pgm_wait_flash_ready(SwireApp* app, const char* cargs) {
     swire_bitbang_transaction_end(app->swire);
 
     swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwWrite, slave_id);
-    swire_bitbang_byte_write(app->swire, MSPI_FLASH_CMD_GET_STATUS);
+    swire_bitbang_byte_write(app->swire, MSPI_FLASH_CMD_READ_STATUS_LOWBYTE);
     swire_bitbang_transaction_end(app->swire);
 
     swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwRead, slave_id);

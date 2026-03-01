@@ -27,11 +27,11 @@ TLSR_FLASH_CMD_READ = 0x03
 TLSR_FLASH_CMD_WRITE_DISABLE = 0x04
 TLSR_FLASH_CMD_READ_STATUS = 0x05
 TLSR_FLASH_CMD_WRITE_ENABLE = 0x06
-TLSR_FLASH_CMD_ERASE_SECTOR = 0x20
+TLSR_FLASH_CMD_ERASE_SECTOR = 0x20  # 4kB
 TLSR_FLASH_CMD_ERASE_CHIP = 0x60
 TLSR_FLASH_CMD_GET_JEDEC_ID = 0x9F
 TLSR_FLASH_CMD_POWER_DOWN = 0xB9
-TLSR_FLASH_CMD_ERASE_BLOCK = 0xD8
+TLSR_FLASH_CMD_ERASE_BLOCK = 0xD8  # 64kB
 
 TLSR_FLASH_FLD_MASTER_SPI_RD = 0x08  # read
 TLSR_FLASH_FLD_MASTER_SPI_SDO = 0x02  # auto
@@ -55,10 +55,12 @@ def main(args=None):
         redeploy_fap(args)
     if args.dump:
         dump(args)
+    if args.erase_sector is not None:
+        erase(args, args.erase_sector, cmd=TLSR_FLASH_CMD_ERASE_SECTOR)
+    if args.erase_block is not None:
+        erase(args, args.erase_block, cmd=TLSR_FLASH_CMD_ERASE_BLOCK)
     if args.flash is not None:
         flash(args)
-    if args.erase is not None:
-        erase(args)
 
 
 def build_argparse():
@@ -71,62 +73,88 @@ def build_argparse():
     parser.add_argument("--blink", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--out", type=str, default=None)
     parser.add_argument("--flash", type=str, default=None)
-    parser.add_argument("--erase", type=int, default=None)
-    parser.add_argument("--length", type=int, default=0)
-    parser.add_argument("--chunksize", type=int, default=256)
-    parser.add_argument("--chunkcount", type=int, default=1)
-    parser.add_argument("--addr", type=int, default=0)
-    parser.add_argument("--bitrate", type=int, default=150000)
-    parser.add_argument("--baud", type=int, default=115200)
-    parser.add_argument("--reset-duration", type=int, default=500)
+    parser.add_argument("--erase-sector", type=int_literal, default=None)
+    parser.add_argument("--erase-block", type=int_literal, default=None)
+    parser.add_argument("--length", type=int_literal, default=0)
+    parser.add_argument("--chunksize", type=int_literal, default=256)
+    parser.add_argument("--chunkcount", type=int_literal, default=1)
+    parser.add_argument("--addr", type=int_literal, default=0)
+    parser.add_argument("--bitrate", type=int_literal, default=150000)
+    parser.add_argument("--baud", type=int_literal, default=115200)
+    parser.add_argument("--reset-duration", type=int_literal, default=500)
     parser.add_argument("--debug", action="store_true", default=False)
     return parser
 
 
-def erase(args):
-    flash_length = args.length
-    if not flash_length:
-        flash_length = SW_MAX_IMAGE_LEN
-    meter = BandwidthCounter()
+def int_literal(s):
+    if s.startswith("0x") or s.startswith("0X"):
+        return int(s, 16)
+    if s.startswith("0b") or s.startswith("0B"):
+        return int(s, 2)
+    if s.startswith("0o") or s.startswith("0O"):
+        return int(s, 8)
+    return int(s, 10)
+
+
+def erase(args, addr, cmd):
     with ExitStack() as stack:
         device = stack.enter_context(TlsrDevice(args))
-
         device.apply_common_setup(stack)
-
-        device.flash.mspi_send_data(
-            [
-                TLSR_FLASH_CMD_WRITE_ENABLE,
-                TLSR_FLASH_CMD_ERASE_SECTOR,
-                *device.flash.blk_addr(args.erase & (TLSR_FLASH_SECTOR_SIZE - 1)),
-            ]
-        )
-        ctrl = device.swire.transaction_read(REG_SPI_CTRL, 1)
-        print(f"[i] REG_SPI_CTRL {ctrl}")
-        device.flash.wait_ready()
+        device.flash.erase(addr=addr, cmd=cmd).result()
 
 
 def flash(args):
-    flash_length = args.length
-    if not flash_length:
-        flash_length = SW_MAX_IMAGE_LEN
+    flash_file_size = args.length
+    if not flash_file_size:
+        flash_file_size = SW_MAX_IMAGE_LEN
     meter = BandwidthCounter()
+    addr = args.addr
+    erased_end = 0
+    if (addr % TLSR_FLASH_SECTOR_SIZE) != 0:
+        raise Exception(f"Start addr must be multiple of 0x{TLSR_FLASH_SECTOR_SIZE:x}")
+    flash_path = args.flash
+    flash_start = addr
+    flash_file_size = min(flash_file_size, os.path.getsize(flash_path))
+    flash_end = addr + flash_file_size
     with ExitStack() as stack:
         device = stack.enter_context(TlsrDevice(args))
 
         device.apply_common_setup(stack)
 
-        flash_length = min(flash_length, os.path.getsize(args.flash))
-        f = open(args.flash, "rb")
-        addr = 0
+        flash_file = stack.enter_context(open(flash_path, "rb"))
+
         meter.restart()
-        while addr < flash_length:
-            chunksize = min(TLSR_FLASH_PAGE_SIZE, flash_length - addr)
-            buf = f.read(chunksize)
-            print(f"Writing {len(buf):x}/{chunksize:x}/{flash_length:x} to flash")
-            device.flash.write2(addr, buf)
-            device.swire.consume_and_checkpoint().result()
-            addr += chunksize
-            meter.add_batch(len(buf))
+
+        def flasher_generator():
+            nonlocal device, addr, erased_end, meter, flash_start, flash_end, flash_file
+
+            while addr < flash_end:
+                sector_addr, sector_end = get_enclosing_block(
+                    addr, TLSR_FLASH_SECTOR_SIZE
+                )
+                _, page_end = get_enclosing_block(addr, TLSR_FLASH_PAGE_SIZE)
+                if addr >= erased_end:
+                    if addr != sector_addr:
+                        print(
+                            f"[W] address misaligned from sector for erase {addr} != {sector_addr}"
+                        )
+                    if args.debug:
+                        print(f"[D] erasing sector {sector_addr}")
+                    device.flash.erase_sector(sector_addr)
+                    erased_end = sector_end
+
+                chunk_size = min(page_end, flash_end) - addr
+                chunk_buf = flash_file.read(chunk_size)
+                assert len(chunk_buf) == chunk_size
+                device.flash.write(addr, chunk_buf)
+                yield device.swire.consume_and_checkpoint()
+                addr += chunk_size
+                meter.add_batch(len(chunk_buf))
+
+        with run_multiplexed(flasher_generator()) as l_iter:
+            for _ in l_iter:
+                pass
+
     print(f"[i] flashed {meter.humantotal_bytes()}")
 
 
@@ -135,6 +163,11 @@ def do_blinking(args):
         device = stack.enter_context(TlsrDevice(args))
         device.apply_common_setup(stack)
         device.maybe_blinking_led1()
+
+
+def get_enclosing_block(x, block_size):
+    start = (x // block_size) * block_size
+    return start, start + block_size
 
 
 def dump(args):
@@ -431,14 +464,14 @@ class TlsrFlash:
                 # without repositioning the flash cursor
                 self.mspi_set_cs(False)
 
-    def _flash_send_cmd(self, cmd):
+    def _flash_send_cmd(self, cmd, gap_us=None):
         self.mspi_set_cs(False)
         self.device.sleep_us(1)
         with self.cpu.with_fifo():
             self.mspi_set_cs(True)
-            self.mspi_send_data(cmd)
+            self.mspi_send_data(cmd, gap_us=gap_us)
 
-    def write(self, addr, data):
+    def write_by_byte(self, addr, data):
         with self.cpu.with_fifo():
             self._flash_send_cmd([TLSR_FLASH_CMD_WRITE_ENABLE])
             self._flash_send_cmd(
@@ -453,16 +486,30 @@ class TlsrFlash:
             self.swire.write_raw_cmd("wfr\n")  # includes disable cs
             return self.swire.consume_and_checkpoint()
 
-    def write2(self, addr, data):
+    def write(self, addr, data):
+        return self._flash_mspi_write(cmd=TLSR_FLASH_CMD_WRITE, addr=addr, data=data)
+
+    def erase_sector(self, addr):
+        return self._flash_mspi_write(
+            cmd=TLSR_FLASH_CMD_ERASE_SECTOR, addr=addr, data=None
+        )
+
+    def erase_block(self, addr):
+        return self._flash_mspi_write(
+            cmd=TLSR_FLASH_CMD_ERASE_BLOCK, addr=addr, data=None
+        )
+
+    def _flash_mspi_write(self, cmd, addr, data):
         with self.cpu.with_fifo():
             self._flash_send_cmd([TLSR_FLASH_CMD_WRITE_ENABLE])
             self._flash_send_cmd(
                 [
-                    TLSR_FLASH_CMD_WRITE,
-                    *self.blk_addr(addr),
-                ]
+                    cmd,
+                    *([] if addr is None else self.blk_addr(addr)),
+                    *([] if data is None else data),
+                ],
+                gap_us=10,
             )
-            self.mspi_send_data(data, gap_us=10000)
             self.swire.write_raw_cmd("wfr\n")  # includes disable cs
             return self.swire.consume_and_checkpoint()
 
@@ -910,14 +957,14 @@ class BandwidthCounter:
         self.pivot = self.start + self.window
         self.first_print = True
 
-    def add_batch(self, size):
+    def add_batch(self, size, message="read speed"):
         self.count_window += size
         self.count_total += size
         if time.time() > self.pivot:
             self.pivot += self.window
             if self.first_print:
                 self.first_print = False
-            print(f"[i] Read speed: {humanbits(8 * self.count_window / self.window)}/s")
+            print(f"[i] {message}: {humanbits(8 * self.count_window / self.window)}/s")
             self.count_window = 0
 
     def humantotal_bytes(self):
