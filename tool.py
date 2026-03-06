@@ -139,7 +139,7 @@ def flash(args):
                             f"[W] address misaligned from sector for erase {addr} != {sector_addr}"
                         )
                     print(f"[i] erasing sector 0x{sector_addr:06x}")
-                    device.flash.erase_sector(sector_addr).result()
+                    device.flash.erase_sector(sector_addr)
                     erased_end = sector_end
 
                 chunk_size = min(page_end, flash_end) - addr
@@ -201,11 +201,11 @@ def dump(args):
                     for data_future in l_iter:
 
                         def _defer(addr, data_future, checkpoint_future):
-                            def defer():
+                            def tail():
                                 checkpoint_future.result()
                                 return addr, data_future.result()
 
-                            return LazyValue(defer)
+                            return LazyValue(tail)
 
                         checkpoint_future = device.swire.consume_and_checkpoint()
                         yield _defer(addr, data_future, checkpoint_future)
@@ -493,7 +493,8 @@ class TlsrFlash:
             line = self.swire.readline()
             if self.swire.debug:
                 print(f"[d] _wait_flash_ready_and_disable_cs result: {line}")
-            if not (line + " ").startswith("ok"):
+            if not (line + " ").startswith("ok "):
+                print(f"[e] error _wait_flash_ready_and_disable_cs: {line}")
                 raise Exception(f"error _wait_flash_ready_and_disable_cs: {line}")
 
         return self.swire.defer(tail)
@@ -522,8 +523,7 @@ class TlsrFlash:
                 ],
                 gap_us=10,
             )
-            self._wait_flash_ready_and_disable_cs()
-            return self.swire.consume_and_checkpoint()
+            return self._wait_flash_ready_and_disable_cs()
 
     def mspi_set_cs(self, value):
         if self.cs_enabled.set(value):
@@ -639,24 +639,28 @@ class Swire:
         self.running = True
         self.slave_id = slave_id
         self.response_executor = BlockingThreadPoolExecutor(max_workers=1, queue_size=4)
-        self.pending_futures = deque()
+        self.last_future = None
         self._defer_depth = 0
 
     def peek_wait(self, keep=0):
+        # todo: deprecated
+        f = self.last_future
+        while f is not None and keep > 0:
+            f = f.history
+            keep -= 1
         result = None
-        while len(self.pending_futures) > keep:
-            result = self.pending_futures.popleft().result()
+        if f is not None:
+            result = f.result()
         return result
 
     def consume_and_checkpoint(self):
-        result = CheckpointFuture(self.pending_futures)
-        self.pending_futures = []
-        return result
+        # todo: deprecated
+        return self.last_future
 
     def defer(self, fn):
         future = self.response_executor.submit(fn)
-        self.pending_futures.append(future)
-        return future
+        self.last_future = ChainedFuture(future, self.last_future)
+        return self.last_future
 
     def _defer_ok(self, error_prefix, expected_result=None):
         if expected_result is None:
@@ -910,6 +914,18 @@ class CheckpointFuture:
     def result(self):
         for f in self.futures:
             f.result()
+
+
+class ChainedFuture:
+    def __init__(self, target, history):
+        self.target = target
+        self.history = history
+
+    def result(self):
+        if self.history is not None:
+            self.history.result()  # to throw exceptions
+            self.history = None
+        return self.target.result()
 
 
 class BoundRegister:

@@ -1,5 +1,6 @@
 
 #include <memory>
+
 #include "src/app/config.hpp"
 #include "src/buildconf.hpp"
 #include <gui/view_dispatcher.h>

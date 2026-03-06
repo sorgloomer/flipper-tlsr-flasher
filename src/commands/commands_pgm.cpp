@@ -261,38 +261,38 @@ FuriStatus cmd_pgm_wait_flash_ready(SwireApp* app, const char* cargs) {
     swire_bitbang_byte_write(app->swire, MSPI_CTRL_CS_ON);
     swire_bitbang_transaction_end(app->swire);
 
-    swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwWrite, slave_id);
-    swire_bitbang_byte_write(app->swire, MSPI_FLASH_CMD_READ_STATUS_LOWBYTE);
-    swire_bitbang_byte_write(app->swire, 0); // write dummy byte to initiate clock
-    swire_bitbang_transaction_end(app->swire);
-
-    swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwRead, slave_id);
-
     uint32_t timeout_deadline = furi_get_tick() + timeout;
     for(uint32_t i = 0;; i++) {
+        swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwWrite, slave_id);
+        swire_bitbang_byte_write(app->swire, MSPI_FLASH_CMD_READ_STATUS_LOWBYTE);
+        swire_bitbang_byte_write(app->swire, 0); // write dummy byte to initiate clock
+        swire_bitbang_transaction_end(app->swire);
+
+        swire_bitbang_transaction_start(app->swire, REG_MSPI_DATA, SwireBitbangRwRead, slave_id);
         int32_t data = swire_bitbang_byte_read(app->swire);
-        if((data & MSPI_FLASH_STATUS_FLAG_BUSY) == 0) {
-#if _OK_RESPONSES == 1
-            auto str = str_printf("ok wfr cyc=%ld status=%02lx", i, data);
-            swire_usb_writeline_str(app->usb, str);
-#endif
-            swire_bitbang_transaction_end(app->swire);
-            swire_bitbang_transaction_start(
-                app->swire, REG_MSPI_CONTROL, SwireBitbangRwWrite, slave_id);
-            swire_bitbang_byte_write(app->swire, MSPI_CTRL_CS_OFF);
-            swire_bitbang_transaction_end(app->swire);
-            return FuriStatusOk;
-        }
-        if((int32_t)(furi_get_tick() - timeout_deadline) > 0) {
+        swire_bitbang_transaction_end(app->swire);
+
+        if((data < 0) || ((int32_t)(furi_get_tick() - timeout_deadline) > 0)) {
             auto str = str_printf("error timeout flash_status=%ld", data);
             swire_usb_writeline_str(app->usb, str);
 
-            swire_bitbang_transaction_end(app->swire);
             swire_bitbang_transaction_start(
                 app->swire, REG_MSPI_CONTROL, SwireBitbangRwWrite, slave_id);
             swire_bitbang_byte_write(app->swire, MSPI_CTRL_CS_OFF);
             swire_bitbang_transaction_end(app->swire);
             return FuriStatusErrorTimeout;
+        }
+
+        if((data & MSPI_FLASH_STATUS_FLAG_BUSY) == 0) {
+#if _OK_RESPONSES == 1
+            auto str = str_printf("ok wfr cyc=%ld status=%02lx", i, data);
+            swire_usb_writeline_str(app->usb, str);
+#endif
+            swire_bitbang_transaction_start(
+                app->swire, REG_MSPI_CONTROL, SwireBitbangRwWrite, slave_id);
+            swire_bitbang_byte_write(app->swire, MSPI_CTRL_CS_OFF);
+            swire_bitbang_transaction_end(app->swire);
+            return FuriStatusOk;
         }
     }
 }
