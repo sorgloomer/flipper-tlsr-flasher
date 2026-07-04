@@ -14,6 +14,10 @@ import concurrent.futures
 from collections import deque
 import sys
 
+# CLI_DEFAULT_BAUD = 115200
+DEFAULT_USB_BAUD = 230400
+DEFAULT_SERIAL_TIMEOUT = 15
+
 SW_MAX_IMAGE_LEN = 512 * 1024
 
 TLSR_DUMP_CHUNK_SIZE = 4
@@ -80,7 +84,7 @@ def build_argparse():
     parser.add_argument("--chunkcount", type=int_literal, default=1)
     parser.add_argument("--addr", type=int_literal, default=0)
     parser.add_argument("--bitrate", type=int_literal, default=150000)
-    parser.add_argument("--baud", type=int_literal, default=115200)
+    parser.add_argument("--baud", type=int_literal, default=DEFAULT_USB_BAUD)
     parser.add_argument("--reset-duration", type=int_literal, default=500)
     parser.add_argument("--debug", action="store_true", default=False)
     return parser
@@ -628,7 +632,7 @@ class Swire:
         if serial is None:
             serial = fl_open_serial(args)
         if timeout is None:
-            timeout = 5
+            timeout = DEFAULT_SERIAL_TIMEOUT
         if slave_id is None:
             slave_id = 0
         self.serial = serial
@@ -965,11 +969,18 @@ def fl_open_serial(args):
     flipper_port = None
     for port, desc, hwid in sorted(ports):
         print(f"     - {port}: {desc} [{hwid}]")
-        if "FLIP_" in hwid:
+        if "FLIP_" in hwid or "Flipper" in desc:
             flipper_port = port
 
+    if flipper_port is None:
+        raise Exception("Could not find flipper serial port")
     print(f"[d] opening {flipper_port}")
-    flipper = serial.Serial(flipper_port, baudrate=args.baud, timeout=1)
+    flipper = serial.Serial(
+        flipper_port,
+        baudrate=args.baud,
+        timeout=DEFAULT_SERIAL_TIMEOUT,
+        write_timeout=DEFAULT_SERIAL_TIMEOUT,
+    )
     return flipper
 
 
